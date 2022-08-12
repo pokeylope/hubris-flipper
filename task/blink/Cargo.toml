@@ -1,0 +1,16 @@
+[package]
+name = "task-blink"
+version = "0.1.0"
+edition = "2018"
+
+[features]
+panic-messages = ["userlib/panic-messages"]
+
+[dependencies]
+cortex-m = {version = "0.7", features = ["inline-asm"]}
+userlib = {path = "../../sys/userlib"}
+
+[[bin]]
+name = "task-blink"
+test = false
+bench = false

@@ -1,0 +1,90 @@
+name = "flipper-zero"
+target = "thumbv7em-none-eabihf"
+board = "flipper-zero"
+chip = "../../chips/stm32wb55"
+stacksize = 896
+
+[kernel]
+name = "flipper-zero"
+requires = {flash = 20000, ram = 3072}
+#
+# For the kernel (and for any task that logs), we are required to enable
+# either "itm" (denoting logging/panicking via ARM's Instrumentation Trace
+# Macrocell) or "semihosting" (denoting logging/panicking via ARM
+# semihosting).  We are biased to ITM because semihosting is excruciatingly
+# slow (it is breakpoint based) and has an undesirable failure mode if logging
+# output is generated and debugger is not attached (namely, the target stops).
+# If one does choose to change this to semihosting for purposes of
+# development, be sure to also change it in every task of interest.
+#
+features = ["itm"]
+
+[tasks.jefe]
+name = "task-jefe"
+priority = 0
+max-sizes = {flash = 8192, ram = 2048}
+start = true
+features = ["itm"]
+stacksize = 1536
+
+#[tasks.rcc_driver]
+#name = "drv-stm32fx-rcc"
+#features = ["f4"]
+#priority = 1
+#max-sizes = {flash = 8192, ram = 1024}
+#uses = ["rcc"]
+#start = true
+#
+#[tasks.usart_driver]
+#name = "drv-stm32fx-usart"
+#features = ["stm32f4"]
+#priority = 2
+#max-sizes = {flash = 8192, ram = 1024}
+#uses = ["usart2", "gpioa"]
+#start = true
+#interrupts = {"usart2.irq" = 1}
+#task-slots = ["rcc_driver"]
+#
+#[tasks.user_leds]
+#name = "drv-user-leds"
+#features = ["stm32f4"]
+#priority = 2
+#max-sizes = {flash = 8192, ram = 1024}
+#uses = ["gpiod"]
+#start = true
+#task-slots = ["rcc_driver"]
+#
+#[tasks.ping]
+#name = "task-ping"
+#features = ["uart"]
+#priority = 4
+#max-sizes = {flash = 8192, ram = 1024}
+#stacksize = 512
+#start = true
+#task-slots = [{peer = "pong"}, "usart_driver"]
+#
+#[tasks.pong]
+#name = "task-pong"
+#priority = 3
+#max-sizes = {flash = 8192, ram = 1024}
+#start = true
+#task-slots = ["user_leds"]
+#
+#[tasks.hiffy]
+#name = "task-hiffy"
+#priority = 3
+#max-sizes = {flash = 16384, ram = 16384 }
+#stacksize = 2048
+#start = true
+
+[tasks.blink]
+name = "task-blink"
+priority = 3
+start = true
+
+[tasks.idle]
+name = "task-idle"
+priority = 5
+max-sizes = {flash = 128, ram = 256}
+stacksize = 256
+start = true
