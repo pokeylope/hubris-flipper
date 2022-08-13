@@ -27,6 +27,11 @@ cfg_if::cfg_if! {
         use stm32h7::stm32h743 as device;
         #[cfg(feature = "h753")]
         use stm32h7::stm32h753 as device;
+    } else if #[cfg(feature = "family-stm32wb")] {
+        use stm32wb as pac;
+
+        #[cfg(feature = "wb55")]
+        use stm32wb::stm32wb55 as device;
     } else {
         compile_error!("unsupported SoC family");
     }
@@ -120,6 +125,21 @@ fn main() -> ! {
                     .gpiojen()
                     .set_bit()
                     .gpioken()
+                    .set_bit()
+            });
+        } else if #[cfg(feature = "family-stm32wb")] {
+            rcc.ahb2enr.write(|w| {
+                w.gpioaen()
+                    .set_bit()
+                    .gpioben()
+                    .set_bit()
+                    .gpiocen()
+                    .set_bit()
+                    .gpioden()
+                    .set_bit()
+                    .gpioeen()
+                    .set_bit()
+                    .gpiohen()
                     .set_bit()
             });
         }
@@ -356,6 +376,67 @@ cfg_if::cfg_if! {
                 Group::Apb2 => unsafe { rcc.apb2rstr.clear_bit(bit) },
                 Group::Apb3 => unsafe { rcc.apb3rstr.clear_bit(bit) },
                 Group::Apb4 => unsafe { rcc.apb4rstr.clear_bit(bit) },
+            }
+        }
+
+    } else if #[cfg(feature = "family-stm32wb")] {
+        fn enable_clock(
+            rcc: &device::rcc::RegisterBlock,
+            group: Group,
+            bit: u8,
+        ) {
+            match group {
+                Group::Ahb1 => unsafe { rcc.ahb1enr.set_bit(bit) },
+                Group::Ahb2 => unsafe { rcc.ahb2enr.set_bit(bit) },
+                Group::Ahb3 => unsafe { rcc.ahb3enr.set_bit(bit) },
+                Group::Apb1_1 => unsafe { rcc.apb1enr1.set_bit(bit) },
+                Group::Apb1_2 => unsafe { rcc.apb1enr2.set_bit(bit) },
+                Group::Apb2 => unsafe { rcc.apb2enr.set_bit(bit) },
+            }
+        }
+
+        fn disable_clock(
+            rcc: &device::rcc::RegisterBlock,
+            group: Group,
+            bit: u8,
+        ) {
+            match group {
+                Group::Ahb1 => unsafe { rcc.ahb1enr.clear_bit(bit) },
+                Group::Ahb2 => unsafe { rcc.ahb2enr.clear_bit(bit) },
+                Group::Ahb3 => unsafe { rcc.ahb3enr.clear_bit(bit) },
+                Group::Apb1_1 => unsafe { rcc.apb1enr1.clear_bit(bit) },
+                Group::Apb1_2 => unsafe { rcc.apb1enr2.clear_bit(bit) },
+                Group::Apb2 => unsafe { rcc.apb2enr.clear_bit(bit) },
+            }
+        }
+
+        fn enter_reset(
+            rcc: &device::rcc::RegisterBlock,
+            group: Group,
+            bit: u8,
+        ) {
+            match group {
+                Group::Ahb1 => unsafe { rcc.ahb1rstr.set_bit(bit) },
+                Group::Ahb2 => unsafe { rcc.ahb2rstr.set_bit(bit) },
+                Group::Ahb3 => unsafe { rcc.ahb3rstr.set_bit(bit) },
+                Group::Apb1_1 => unsafe { rcc.apb1rstr1.set_bit(bit) },
+                Group::Apb1_2 => unsafe { rcc.apb1rstr2.set_bit(bit) },
+                Group::Apb2 => unsafe { rcc.apb2rstr.set_bit(bit) },
+            }
+        }
+
+        fn leave_reset(
+            rcc: &device::rcc::RegisterBlock,
+            group: Group,
+            bit: u8,
+        ) {
+            match group {
+                Group::Ahb1 => unsafe { rcc.ahb1rstr.clear_bit(bit) },
+                Group::Ahb2 => unsafe { rcc.ahb2rstr.clear_bit(bit) },
+                Group::Ahb3 => unsafe { rcc.ahb3rstr.clear_bit(bit) },
+                Group::Apb1_1 => unsafe { rcc.apb1rstr1.clear_bit(bit) },
+                Group::Apb1_2 => unsafe { rcc.apb1rstr2.clear_bit(bit) },
+                Group::Apb2 => unsafe { rcc.apb2rstr.clear_bit(bit) },
             }
         }
 

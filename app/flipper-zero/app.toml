@@ -1,7 +1,7 @@
 name = "flipper-zero"
 target = "thumbv7em-none-eabihf"
 board = "flipper-zero"
-chip = "../../chips/stm32wb55"
+chip = "../../chips/stm32wb"
 stacksize = 896
 
 [kernel]
@@ -27,60 +27,19 @@ start = true
 features = ["itm"]
 stacksize = 1536
 
-#[tasks.rcc_driver]
-#name = "drv-stm32fx-rcc"
-#features = ["f4"]
-#priority = 1
-#max-sizes = {flash = 8192, ram = 1024}
-#uses = ["rcc"]
-#start = true
-#
-#[tasks.usart_driver]
-#name = "drv-stm32fx-usart"
-#features = ["stm32f4"]
-#priority = 2
-#max-sizes = {flash = 8192, ram = 1024}
-#uses = ["usart2", "gpioa"]
-#start = true
-#interrupts = {"usart2.irq" = 1}
-#task-slots = ["rcc_driver"]
-#
-#[tasks.user_leds]
-#name = "drv-user-leds"
-#features = ["stm32f4"]
-#priority = 2
-#max-sizes = {flash = 8192, ram = 1024}
-#uses = ["gpiod"]
-#start = true
-#task-slots = ["rcc_driver"]
-#
-#[tasks.ping]
-#name = "task-ping"
-#features = ["uart"]
-#priority = 4
-#max-sizes = {flash = 8192, ram = 1024}
-#stacksize = 512
-#start = true
-#task-slots = [{peer = "pong"}, "usart_driver"]
-#
-#[tasks.pong]
-#name = "task-pong"
-#priority = 3
-#max-sizes = {flash = 8192, ram = 1024}
-#start = true
-#task-slots = ["user_leds"]
-#
-#[tasks.hiffy]
-#name = "task-hiffy"
-#priority = 3
-#max-sizes = {flash = 16384, ram = 16384 }
-#stacksize = 2048
-#start = true
+[tasks.sys]
+name = "drv-stm32xx-sys"
+features = ["wb55"]
+priority = 1
+max-sizes = {flash = 4096, ram = 1024}
+uses = ["rcc", "gpios1", "gpios2", "gpios3"]
+start = true
 
 [tasks.blink]
 name = "task-blink"
 priority = 3
 start = true
+task-slots = ["sys"]
 
 [tasks.idle]
 name = "task-idle"

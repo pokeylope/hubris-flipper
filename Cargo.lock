@@ -1344,6 +1344,7 @@ dependencies = [
  "num-traits",
  "stm32g0",
  "stm32h7",
+ "stm32wb",
  "userlib",
  "zerocopy",
 ]
@@ -1360,6 +1361,7 @@ dependencies = [
  "num-traits",
  "stm32g0",
  "stm32h7",
+ "stm32wb",
  "userlib",
  "zerocopy",
 ]
@@ -3068,6 +3070,7 @@ name = "task-blink"
 version = "0.1.0"
 dependencies = [
  "cortex-m",
+ "drv-stm32xx-sys-api",
  "userlib",
 ]
 

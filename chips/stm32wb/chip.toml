@@ -1,19 +1,23 @@
 [usart2]
 address = 0x4000_4400
-size = 1024
+size = 0x0400
 interrupts = { irq = 38 }
 
 [rcc]
 address = 0x5800_0000
-size = 1024
+size = 0x0400
 
-[gpioa]
+[gpios1]
 address = 0x4800_0000
-size = 1024
+size = 0x1000
 
-[gpiod]
-address = 0x4800_0c00
-size = 1024
+[gpios2]
+address = 0x4800_1000
+size = 0x0400
+
+[gpios3]
+address = 0x4800_1c00
+size = 0x0400
 
 [i2c1]
 address = 0x4000_5400

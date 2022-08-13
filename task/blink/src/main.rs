@@ -5,21 +5,23 @@
 #![no_std]
 #![no_main]
 
+use drv_stm32xx_sys_api::*;
 use userlib::*;
 
-//task_slot!(USER_LEDS, user_leds);
+task_slot!(SYS, sys);
 
 #[export_name = "main"]
 pub fn main() -> ! {
-    const TIMER_NOTIFICATION: u32 = 1;
-    const INTERVAL: u64 = 500;
+    const INTERVAL: u64 = 3000;
 
-    let mut response: u32 = 0;
+    let pins = PinSet { port: Port::A, pin_mask: 1 << 7 };
+    let sys = Sys::from(SYS.get_task_id());
+    sys.gpio_configure_output(pins, OutputType::PushPull, Speed::Low, Pull::None).unwrap();
 
-    let mut msg = [0; 16];
-    let mut dl = INTERVAL;
-    sys_set_timer(Some(dl), TIMER_NOTIFICATION);
     loop {
-        let msginfo = sys_recv_open(&mut msg, TIMER_NOTIFICATION);
+        sys.gpio_set(pins).unwrap();
+        hl::sleep_for(INTERVAL);
+        sys.gpio_reset(pins).unwrap();
+        hl::sleep_for(INTERVAL);
     }
 }

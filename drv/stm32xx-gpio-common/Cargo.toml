@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 cfg-if = "1"
 stm32h7 = { version = "0.14", default-features = false, optional = true }
+stm32wb = { version = "0.15.1", default-features = false, optional = true }
 userlib = {path = "../../sys/userlib"}
 num-traits = {version = "0.2", default-features = false}
 zerocopy = "0.6.1"
@@ -62,12 +63,28 @@ family-stm32h7 = [
 model-stm32h743 = ["family-stm32h7"]
 model-stm32h753 = ["family-stm32h7"]
 
+family-stm32wb = [
+    "stm32wb",
+    "has-gpioa-type",
+    "has-gpiob-type",
+    "has-gpioc-type",
+    "has-gpioe-type",
+    "has-gpioh-type",
+    "has-af8-thru-af15",
+    "has-port-gpioe",
+    "has-port-gpioh",
+]
+model-stm32wb55 = ["family-stm32wb"]
+
 # The has-gpioX-type features indicates that the PAC for the chosen model calls
 # at least some of the GPIO ports `gpioX`. Note that this has nothing to do
 # with the actual identity of the port; GPIOX is probably called `gpioX` but
 # GPIOZ might be too.
 has-gpioa-type = []
 has-gpiob-type = []
+has-gpioc-type = []
+has-gpioe-type = []
+has-gpioh-type = []
 
 # The has-port-gpioX features indicate that the model or family includes the
 # given GPIO port in the memory map. Numbering here starts at E because it is a

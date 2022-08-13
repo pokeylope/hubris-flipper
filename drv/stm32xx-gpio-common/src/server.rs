@@ -36,6 +36,15 @@ cfg_if::cfg_if! {
                 compile_error!("unsupported or missing SoC model feature");
             }
         }
+    } else if #[cfg(feature = "family-stm32wb")] {
+        use stm32wb as pac;
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "model-stm32wb55")] {
+                use pac::stm32wb55 as device;
+            } else {
+                compile_error!("unsupported or missing SoC model feature");
+            }
+        }
     } else {
         compile_error!("unsupported or missing SoC family feature");
     }
@@ -259,6 +268,15 @@ impl_gpio_periph!(gpiob);
 
 // Add add'l types here as PAC crates invent more - L4 in particular
 // distinguishes gpioc, so if we support that family, gpioc would go here.
+
+#[cfg(feature = "has-gpioc-type")]
+impl_gpio_periph!(gpioc);
+
+#[cfg(feature = "has-gpioe-type")]
+impl_gpio_periph!(gpioe);
+
+#[cfg(feature = "has-gpioh-type")]
+impl_gpio_periph!(gpioh);
 
 /// Interleaves bits in `input` as follows:
 ///
