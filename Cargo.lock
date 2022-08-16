@@ -1344,7 +1344,7 @@ dependencies = [
  "num-traits",
  "stm32g0",
  "stm32h7",
- "stm32wb",
+ "stm32wb 0.15.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "userlib",
  "zerocopy",
 ]
@@ -1361,7 +1361,7 @@ dependencies = [
  "num-traits",
  "stm32g0",
  "stm32h7",
- "stm32wb",
+ "stm32wb 0.15.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "userlib",
  "zerocopy",
 ]
@@ -1526,7 +1526,7 @@ dependencies = [
  "panic-halt",
  "panic-itm",
  "panic-semihosting",
- "stm32wb",
+ "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
 ]
 
 [[package]]
@@ -2987,6 +2987,16 @@ name = "stm32wb"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caf2c1ec978d021e79cd2065efadc49a231779ec22647f92cdcb9cbf83b0e62d"
+dependencies = [
+ "bare-metal 1.0.0",
+ "cortex-m",
+ "vcell",
+]
+
+[[package]]
+name = "stm32wb"
+version = "0.15.1"
+source = "git+https://github.com/pokeylope/stm32wb#e448c820a3c2404b5c81d255d2be0ca3c5461367"
 dependencies = [
  "bare-metal 1.0.0",
  "cortex-m",
