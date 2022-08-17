@@ -35,11 +35,24 @@ max-sizes = {flash = 4096, ram = 1024}
 uses = ["rcc", "gpios1", "gpios2", "gpios3"]
 start = true
 
+[tasks.i2c_driver]
+name = "drv-stm32h7-i2c-server"
+features = ["wb55"]
+priority = 2
+max-sizes = {flash = 16384, ram = 2048}
+uses = ["i2c1"]
+start = true
+task-slots = ["sys"]
+
+[tasks.i2c_driver.interrupts]
+"i2c1.event" = 0b0000_0001
+"i2c1.error" = 0b0000_0001
+
 [tasks.blink]
 name = "task-blink"
 priority = 3
 start = true
-task-slots = ["sys"]
+task-slots = ["sys", "i2c_driver"]
 
 [tasks.idle]
 name = "task-idle"
@@ -47,3 +60,17 @@ priority = 5
 max-sizes = {flash = 128, ram = 256}
 stacksize = 256
 start = true
+
+[config]
+[[config.i2c.controllers]]
+controller = 1
+
+[[config.i2c.controllers.ports.A.pins]]
+pins = [ 9, 10 ]
+af = 4
+
+[[config.i2c.devices]]
+controller = 1
+address = 0x30
+device = "lp5562"
+description = "LED controller"

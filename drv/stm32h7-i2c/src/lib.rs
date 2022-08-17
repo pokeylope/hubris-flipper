@@ -15,16 +15,19 @@ use stm32h7::stm32h743 as device;
 #[cfg(feature = "h753")]
 use stm32h7::stm32h753 as device;
 
+#[cfg(feature = "wb55")]
+use stm32wb::stm32wb55 as device;
+
 #[cfg(feature = "h7b3")]
 pub type RegisterBlock = device::i2c3::RegisterBlock;
 
 #[cfg(feature = "h7b3")]
 pub type Isr = device::i2c3::isr::R;
 
-#[cfg(any(feature = "h743", feature = "h753"))]
+#[cfg(any(feature = "h743", feature = "h753", feature = "wb55"))]
 pub type RegisterBlock = device::i2c1::RegisterBlock;
 
-#[cfg(any(feature = "h743", feature = "h753"))]
+#[cfg(any(feature = "h743", feature = "h753", feature = "wb55"))]
 pub type Isr = device::i2c1::isr::R;
 
 pub mod ltc4306;
@@ -275,6 +278,15 @@ impl<'a> I2cController<'a> {
                     .scldel().bits(scldel)
                     .sdadel().bits(0)
                 });
+            } else if #[cfg(feature = "wb55")] {
+                // APB1 peripheral clock is 64MHz
+                i2c.timingr.write(|w| { w
+                    .presc().bits(1)
+                    .sclh().bits(0x7d)
+                    .scll().bits(0xbc)
+                    .scldel().bits(7)
+                    .sdadel().bits(0)
+                });
             } else {
                 compile_error!("unknown STM32H7 variant");
             }
@@ -302,6 +314,12 @@ impl<'a> I2cController<'a> {
                 i2c.timeoutr.write(|w| { w
                     .timouten().set_bit()           // Enable SCL timeout
                     .timeouta().bits(3417)          // Timeout value
+                    .tidle().clear_bit()            // Want SCL, not IDLE
+                });
+            } else if #[cfg(feature = "wb55")] {
+                i2c.timeoutr.write(|w| { w
+                    .timouten().set_bit()           // Enable SCL timeout
+                    .timeouta().bits(780)           // Timeout value
                     .tidle().clear_bit()            // Want SCL, not IDLE
                 });
             }

@@ -11,6 +11,7 @@
 //! - [`at24csw080`]: AT24CSW080 serial EEPROM
 //! - [`ds2482`]: DS2482-100 1-wire initiator
 //! - [`isl68224`]: ISL68224 power controller
+//! - [`lp5562`]: LP5562 LED controller
 //! - [`max6634`]: MAX6634 temperature sensor
 //! - [`max31790`]: MAX31790 fan controller
 //! - [`mcp9808`]: MCP9808 temperature sensor
@@ -159,6 +160,7 @@ pub mod at24csw080;
 pub mod bmr491;
 pub mod ds2482;
 pub mod isl68224;
+pub mod lp5562;
 pub mod max31790;
 pub mod max6634;
 pub mod mcp9808;

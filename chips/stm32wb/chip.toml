@@ -21,4 +21,5 @@ size = 0x0400
 
 [i2c1]
 address = 0x4000_5400
-size = 1024
+size = 0x0400
+interrupts = { event = 30, error = 31 }

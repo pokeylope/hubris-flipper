@@ -1235,6 +1235,7 @@ dependencies = [
  "num-traits",
  "ringbuf",
  "stm32h7",
+ "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
  "userlib",
  "zerocopy",
 ]
@@ -1255,6 +1256,7 @@ dependencies = [
  "num-traits",
  "ringbuf",
  "stm32h7",
+ "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
  "userlib",
 ]
 
@@ -3079,7 +3081,10 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 name = "task-blink"
 version = "0.1.0"
 dependencies = [
+ "build-i2c",
  "cortex-m",
+ "drv-i2c-api",
+ "drv-i2c-devices",
  "drv-stm32xx-sys-api",
  "userlib",
 ]
