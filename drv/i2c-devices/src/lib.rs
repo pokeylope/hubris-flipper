@@ -158,6 +158,7 @@ pub mod adm1272;
 pub mod adt7420;
 pub mod at24csw080;
 pub mod bmr491;
+pub mod bq25896;
 pub mod ds2482;
 pub mod isl68224;
 pub mod lp5562;

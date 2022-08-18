@@ -74,3 +74,9 @@ controller = 1
 address = 0x30
 device = "lp5562"
 description = "LED controller"
+
+[[config.i2c.devices]]
+controller = 1
+address = 0x6b
+device = "bq25896"
+description = "Battery controller"
