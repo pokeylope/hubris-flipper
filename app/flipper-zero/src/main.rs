@@ -20,17 +20,28 @@ extern crate panic_semihosting; // requires a debugger
 // gets linked in.
 extern crate stm32wb;
 
+use core::arch::asm;
 use cortex_m_rt::entry;
 use stm32wb::stm32wb55 as device;
 
+const CYCLES_PER_MS_BOOT: u32 = 4_000;
+const CYCLES_PER_MS_MAIN: u32 = 64_000;
 const HSE_CONTROL_UNLOCK_KEY: u32 = 0xcafecafe;
 
 #[entry]
 fn main() -> ! {
-    const CYCLES_PER_MS_MAIN: u32 = 64_000;
-
     let p = device::Peripherals::take().unwrap();
 
+    setup_buttons(&p);
+    delay_ms(100);
+    check_dfu(&p);
+
+    setup_clocks(&p);
+
+    unsafe { kern::startup::start_kernel(CYCLES_PER_MS_MAIN) }
+}
+
+fn setup_clocks(p: &device::Peripherals) {
     /* Prepare Flash memory for 64MHz system clock */
     //LL_FLASH_SetLatency(LL_FLASH_LATENCY_3);
     //while(LL_FLASH_GetLatency() != LL_FLASH_LATENCY_3)
@@ -208,6 +219,39 @@ fn main() -> ! {
         .smpscr
         .modify(|_, w| w.smpssel().variant(3).smpsdiv().variant(1));
     p.RCC.csr.modify(|_, w| w.rfwkpsel().lse());
+}
 
-    unsafe { kern::startup::start_kernel(CYCLES_PER_MS_MAIN) }
+fn setup_buttons(p: &device::Peripherals) {
+    // Set up GPIO for left button
+    p.RCC.ahb2enr.modify(|_, w| w.gpioben().enabled());
+    cortex_m::asm::dmb();
+    p.GPIOB.moder.modify(|_, w| w.moder11().variant(0));
+    p.GPIOB.pupdr.modify(|_, w| w.pupdr11().variant(1));
+    p.GPIOB.ospeedr.modify(|_, w| w.ospeedr11().variant(0));
+}
+
+fn check_dfu(p: &device::Peripherals) {
+    // Enter DFU mode if left button is held during boot
+    if !p.GPIOB.idr.read().idr11().bit_is_set() {
+        p.SYSCFG.memrmp.modify(|_, w| w.mem_mode().variant(1));
+        cortex_m::asm::dsb();
+        unsafe {
+            asm!(
+                "
+                mov r0, #0
+                ldr r1, [r0]
+                msr msp, r1
+                ldr r1, [r0, #4]
+                mov pc, r1
+                "
+            );
+        }
+    }
+}
+
+fn delay_ms(ms: u32) {
+    let cp = cortex_m::Peripherals::take().unwrap();
+    let mut delay =
+        cortex_m::delay::Delay::new(cp.SYST, CYCLES_PER_MS_BOOT * 1000);
+    delay.delay_ms(ms);
 }
