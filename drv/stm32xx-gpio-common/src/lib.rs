@@ -19,23 +19,23 @@ pub mod server;
 #[repr(u8)]
 pub enum Port {
     A = 0,
-    B,
-    C,
-    D,
+    B = 1,
+    C = 2,
+    D = 3,
     #[cfg(feature = "has-port-gpioe")]
-    E,
+    E = 4,
     #[cfg(feature = "has-port-gpiof")]
-    F,
+    F = 5,
     #[cfg(feature = "has-port-gpiog")]
-    G,
+    G = 6,
     #[cfg(feature = "has-port-gpioh")]
-    H,
+    H = 7,
     #[cfg(feature = "has-port-gpioi")]
-    I,
+    I = 8,
     #[cfg(feature = "has-port-gpioj")]
-    J,
+    J = 9,
     #[cfg(feature = "has-port-gpiok")]
-    K,
+    K = 10,
 }
 
 impl Port {

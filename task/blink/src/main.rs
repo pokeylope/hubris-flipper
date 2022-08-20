@@ -5,7 +5,7 @@
 #![no_std]
 #![no_main]
 
-use drv_i2c_devices::{bq25896::*, lp5562::*};
+use drv_i2c_devices::{bq25896::*/*, lp5562::* */};
 use drv_stm32xx_sys_api::*;
 use userlib::*;
 
@@ -42,10 +42,10 @@ pub fn main() -> ! {
     .unwrap();
 
     let i2c_task = I2C.get_task_id();
-    let lp5562 = Lp5562::new(&i2c_config::devices::lp5562(i2c_task)[0]);
+    //let lp5562 = Lp5562::new(&i2c_config::devices::lp5562(i2c_task)[0]);
     let bq25896 = Bq25896::new(&i2c_config::devices::bq25896(i2c_task)[0]);
 
-    lp5562.initialize().unwrap();
+    //lp5562.initialize().unwrap();
 
     let mut button_held = false;
 
@@ -64,12 +64,12 @@ pub fn main() -> ! {
     loop {
         check_button();
         sys.gpio_set(OUT_PIN).unwrap();
-        lp5562.set_color(255, 0, 0).unwrap();
+        //lp5562.set_color(255, 0, 0).unwrap();
         hl::sleep_for(INTERVAL);
 
         check_button();
         sys.gpio_reset(OUT_PIN).unwrap();
-        lp5562.set_color(0, 0, 255).unwrap();
+        //lp5562.set_color(0, 0, 255).unwrap();
         hl::sleep_for(INTERVAL);
     }
 }

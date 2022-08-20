@@ -3,9 +3,14 @@ address = 0x4000_4400
 size = 0x0400
 interrupts = { irq = 38 }
 
-[rcc]
-address = 0x5800_0000
+[i2c1]
+address = 0x4000_5400
 size = 0x0400
+interrupts = { event = 30, error = 31 }
+
+[syscfg]
+address = 0x4001_0100
+size = 0x0200
 
 [gpios1]
 address = 0x4800_0000
@@ -19,7 +24,19 @@ size = 0x0400
 address = 0x4800_1c00
 size = 0x0400
 
-[i2c1]
-address = 0x4000_5400
+[rcc]
+address = 0x5800_0000
 size = 0x0400
-interrupts = { event = 30, error = 31 }
+
+[exti]
+address = 0x5800_0800
+size = 0x0400
+
+[exti.interrupts]
+exti0 = 6
+exti1 = 7
+exti2 = 8
+exti3 = 9
+exti4 = 10
+exti9_5 = 23
+exti15_10 = 40

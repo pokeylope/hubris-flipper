@@ -48,9 +48,21 @@ task-slots = ["sys"]
 "i2c1.event" = 0b0000_0001
 "i2c1.error" = 0b0000_0001
 
+[tasks.input]
+name = "drv-flipper-input"
+priority = 3
+start = true
+task-slots = ["sys", "i2c_driver"]
+uses = ["syscfg", "exti"]
+
+[tasks.input.interrupts]
+"exti.exti3" = 0b0000_0001
+"exti.exti9_5" = 0b0000_0010
+"exti.exti15_10" = 0b0000_0100
+
 [tasks.blink]
 name = "task-blink"
-priority = 3
+priority = 4
 start = true
 task-slots = ["sys", "i2c_driver"]
 

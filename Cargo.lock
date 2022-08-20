@@ -663,6 +663,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "drv-flipper-input"
+version = "0.1.0"
+dependencies = [
+ "build-i2c",
+ "drv-i2c-api",
+ "drv-i2c-devices",
+ "drv-stm32xx-sys-api",
+ "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
+ "userlib",
+]
+
+[[package]]
 name = "drv-fpga-api"
 version = "0.1.0"
 dependencies = [
