@@ -26,7 +26,6 @@ use stm32wb::stm32wb55 as device;
 
 const CYCLES_PER_MS_BOOT: u32 = 4_000;
 const CYCLES_PER_MS_MAIN: u32 = 64_000;
-const HSE_CONTROL_UNLOCK_KEY: u32 = 0xcafecafe;
 
 #[entry]
 fn main() -> ! {
@@ -58,9 +57,7 @@ fn setup_clocks(p: &device::Peripherals) {
     //while(!HS_CLOCK_IS_READY())
     //    ;
     //LL_RCC_HSE_EnableCSS();
-    p.RCC
-        .hsecr
-        .write(|w| unsafe { w.bits(HSE_CONTROL_UNLOCK_KEY) });
+    p.RCC.hsecr.write(|w| w.key().unlock());
     p.RCC.hsecr.modify(|_, w| w.hsetune().variant(0x26));
     p.RCC
         .cr
@@ -86,9 +83,7 @@ fn setup_clocks(p: &device::Peripherals) {
     //LL_RCC_EnableIT_LSECSS();
     //LL_RCC_LSE_EnableCSS();
     p.PWR.cr1.modify(|_, w| w.dbp().set_bit());
-    p.RCC
-        .bdcr
-        .modify(|_, w| w.lsedrv().variant(3).lseon().set_bit());
+    p.RCC.bdcr.modify(|_, w| w.lsedrv().high().lseon().on());
     p.RCC.csr.modify(|_, w| w.lsi1on().on());
     while !(p.RCC.bdcr.read().lserdy().bit_is_set()
         && p.RCC.csr.read().lsi1rdy().is_ready())
@@ -136,7 +131,7 @@ fn setup_clocks(p: &device::Peripherals) {
         .modify(|_, w| w.pllsrc().hse32().pllm().div2());
     p.RCC
         .pllsai1cfgr
-        .modify(|_, w| w.plln().variant(6).pllq().variant(1).pllr().variant(1));
+        .modify(|_, w| w.plln().variant(6).pllq().div2().pllr().div2());
     p.RCC.cr.modify(|_, w| w.pllsai1on().on());
     p.RCC
         .pllsai1cfgr
@@ -152,7 +147,7 @@ fn setup_clocks(p: &device::Peripherals) {
 
     /* Set CPU2 prescaler*/
     //LL_C2_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_2);
-    p.RCC.extcfgr.modify(|_, w| w.c2hpre().variant(8));
+    p.RCC.extcfgr.modify(|_, w| w.c2hpre().div2());
 
     //LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_PLL);
     //while(LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_PLL)
@@ -203,21 +198,21 @@ fn setup_clocks(p: &device::Peripherals) {
     //LL_RCC_SetRFWKPClockSource(LL_RCC_RFWKP_CLKSOURCE_LSE);
     p.RCC.ccipr.modify(|_, w| {
         w.usart1sel()
-            .variant(0)
+            .pclk()
             .lpuart1sel()
-            .variant(0)
+            .pclk()
             .adcsel()
-            .variant(1)
+            .pllsai1()
             .i2c1sel()
-            .variant(0)
+            .pclk()
             .rngsel()
-            .variant(0)
+            .clk48()
             .clk48sel()
-            .variant(1)
+            .pllsai1()
     });
     p.RCC
         .smpscr
-        .modify(|_, w| w.smpssel().variant(3).smpsdiv().variant(1));
+        .modify(|_, w| w.smpssel().hse().smpsdiv().variant(1));
     p.RCC.csr.modify(|_, w| w.rfwkpsel().lse());
 }
 
@@ -233,7 +228,7 @@ fn setup_buttons(p: &device::Peripherals) {
 fn check_dfu(p: &device::Peripherals) {
     // Enter DFU mode if left button is held during boot
     if !p.GPIOB.idr.read().idr11().bit_is_set() {
-        p.SYSCFG.memrmp.modify(|_, w| w.mem_mode().variant(1));
+        p.SYSCFG.memrmp.modify(|_, w| w.mem_mode().system_flash());
         cortex_m::asm::dsb();
         unsafe {
             asm!(
