@@ -669,7 +669,9 @@ dependencies = [
  "build-i2c",
  "drv-i2c-api",
  "drv-i2c-devices",
+ "drv-spi-api",
  "drv-stm32xx-sys-api",
+ "st7565r",
  "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
  "userlib",
 ]
@@ -1348,6 +1350,42 @@ dependencies = [
  "drv-stm32xx-sys-api",
  "stm32h7",
  "userlib",
+]
+
+[[package]]
+name = "drv-stm32wb-spi"
+version = "0.1.0"
+dependencies = [
+ "num-traits",
+ "ringbuf",
+ "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
+ "vcell",
+ "zerocopy",
+]
+
+[[package]]
+name = "drv-stm32wb-spi-server"
+version = "0.1.0"
+dependencies = [
+ "build-util",
+ "call_rustfmt",
+ "cfg-if",
+ "cortex-m",
+ "drv-spi-api",
+ "drv-stm32wb-spi",
+ "drv-stm32xx-sys-api",
+ "idol",
+ "idol-runtime",
+ "indexmap",
+ "num-traits",
+ "proc-macro2",
+ "quote",
+ "ringbuf",
+ "serde",
+ "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
+ "syn",
+ "userlib",
+ "zerocopy",
 ]
 
 [[package]]
@@ -2911,6 +2949,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "st7565r"
+version = "0.1.0"
+dependencies = [
+ "drv-spi-api",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3010,7 +3055,7 @@ dependencies = [
 [[package]]
 name = "stm32wb"
 version = "0.15.1"
-source = "git+https://github.com/pokeylope/stm32wb#f811d0c640dbb6d42bda7e0c2ba5202eb8d4c133"
+source = "git+https://github.com/pokeylope/stm32wb#fba3c736cc9ee5804aa9f3c61c2d15f75ccc5908"
 dependencies = [
  "bare-metal 1.0.0",
  "cortex-m",

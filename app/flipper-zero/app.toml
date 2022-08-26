@@ -44,6 +44,20 @@ uses = ["i2c1"]
 start = true
 task-slots = ["sys"]
 
+[tasks.spi_driver]
+name = "drv-stm32wb-spi-server"
+priority = 2
+max-sizes = {flash = 16384, ram = 2048}
+features = ["spi2", "wb55"]
+uses = ["spi2"]
+start = true
+interrupts = {"spi2.irq" = 1}
+stacksize = 880
+task-slots = ["sys"]
+
+[tasks.spi_driver.config.spi]
+global_config = "spi2"
+
 [tasks.i2c_driver.interrupts]
 "i2c1.event" = 0b0000_0001
 "i2c1.error" = 0b0000_0001
@@ -52,7 +66,7 @@ task-slots = ["sys"]
 name = "drv-flipper-input"
 priority = 3
 start = true
-task-slots = ["sys", "i2c_driver"]
+task-slots = ["sys", "i2c_driver", "spi_driver"]
 uses = ["syscfg", "exti"]
 
 [tasks.input.interrupts]
@@ -74,6 +88,22 @@ stacksize = 256
 start = true
 
 [config]
+[config.spi.spi2]
+controller = 2
+fifo_depth = 4
+
+[config.spi.spi2.mux_options.display]
+outputs = [
+    {port = "B", pins = [15], af = 5},
+    {port = "D", pins = [1], af = 5},
+]
+input = {port = "C", pin = 2, af = 5}
+
+[config.spi.spi2.devices.display]
+mux = "display"
+cs = [{port = "C", pin = 11}]
+clock_divider = "Div16"
+
 [[config.i2c.controllers]]
 controller = 1
 

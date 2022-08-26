@@ -7,8 +7,10 @@
 
 use core::convert::From;
 use drv_i2c_devices::lp5562::*;
+use drv_spi_api::Spi;
 use drv_stm32xx_sys_api::*;
 use stm32wb::stm32wb55 as device;
+use st7565r::St7565r;
 use userlib::*;
 
 struct Button {
@@ -41,6 +43,7 @@ const BUTTONS: [Button; 6] = [
 
 include!(concat!(env!("OUT_DIR"), "/i2c_config.rs"));
 task_slot!(I2C, i2c_driver);
+task_slot!(SPI, spi_driver);
 task_slot!(SYS, sys);
 
 const EXTI3: u32 = 1 << 0;
@@ -48,6 +51,8 @@ const EXTI9_5: u32 = 1 << 1;
 const EXTI15_10: u32 = 1 << 2;
 
 const OUT_PIN: PinSet = Port::A.pin(6);
+const DISPLAY_RST_N: PinSet = Port::B.pin(0);
+const DISPLAY_DI: PinSet = Port::B.pin(1);
 
 #[export_name = "main"]
 fn main() -> ! {
@@ -60,6 +65,21 @@ fn main() -> ! {
         Pull::None,
     )
     .unwrap();
+    sys.gpio_configure_output(
+        DISPLAY_RST_N,
+        OutputType::PushPull,
+        Speed::Low,
+        Pull::None,
+    )
+    .unwrap();
+    sys.gpio_configure_output(
+        DISPLAY_DI,
+        OutputType::PushPull,
+        Speed::Low,
+        Pull::None,
+    )
+    .unwrap();
+    sys.gpio_set(DISPLAY_RST_N).unwrap();
 
     let p = device::Peripherals::take().unwrap();
     let syscfg = p.SYSCFG;
@@ -74,6 +94,11 @@ fn main() -> ! {
     let lp5562 = Lp5562::new(&i2c_config::devices::lp5562(i2c_task)[0]);
     lp5562.initialize().unwrap();
     lp5562.set_color(255, 0, 0).unwrap();
+
+    let spi = Spi::from(SPI.get_task_id()).device(0);
+    let st7565r = St7565r::new(spi);
+    st7565r.initialize().unwrap();
+    st7565r.test().unwrap();
 
     sys_irq_control(EXTI3, true);
     sys_irq_control(EXTI9_5, true);

@@ -29,4 +29,6 @@ pub enum Group {
 #[repr(u32)]
 pub enum Peripheral {
     I2c1 = periph(Group::Apb1_1, 21),
+    Spi1 = periph(Group::Apb2, 12),
+    Spi2 = periph(Group::Apb1_1, 14),
 }
