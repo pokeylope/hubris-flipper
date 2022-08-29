@@ -10,8 +10,10 @@ use drv_i2c_devices::lp5562::*;
 use drv_spi_api::Spi;
 use drv_stm32xx_sys_api::*;
 use stm32wb::stm32wb55 as device;
-use st7565r::St7565r;
+use st7565r::{Mode, St7565r};
 use userlib::*;
+
+const BACKLIGHT_DURATION: u64 = 10 * 1000;
 
 struct Button {
     pinset: PinSet,
@@ -49,6 +51,7 @@ task_slot!(SYS, sys);
 const EXTI3: u32 = 1 << 0;
 const EXTI9_5: u32 = 1 << 1;
 const EXTI15_10: u32 = 1 << 2;
+const TIMER_EXPIRED: u32 = 1 << 3;
 
 const OUT_PIN: PinSet = Port::A.pin(6);
 const DISPLAY_RST_N: PinSet = Port::B.pin(0);
@@ -94,27 +97,40 @@ fn main() -> ! {
     let lp5562 = Lp5562::new(&i2c_config::devices::lp5562(i2c_task)[0]);
     lp5562.initialize().unwrap();
     lp5562.set_color(255, 0, 0).unwrap();
+    lp5562.enable_backlight().unwrap();
 
     let spi = Spi::from(SPI.get_task_id()).device(0);
-    let st7565r = St7565r::new(spi);
+    let toggle_di = |mode| match mode {
+        Mode::Command => sys.gpio_reset(DISPLAY_DI).unwrap(),
+        Mode::Data => sys.gpio_set(DISPLAY_DI).unwrap(),
+    };
+    let mut st7565r = St7565r::new(spi, toggle_di);
     st7565r.initialize().unwrap();
     st7565r.test().unwrap();
 
     sys_irq_control(EXTI3, true);
     sys_irq_control(EXTI9_5, true);
     sys_irq_control(EXTI15_10, true);
+    sys_set_timer(Some(sys_get_timer().now + BACKLIGHT_DURATION), TIMER_EXPIRED);
     loop {
-        let result = sys_recv_closed(&mut [], EXTI3 | EXTI9_5 | EXTI15_10, TaskId::KERNEL).unwrap();
-        if let Some(button) = BUTTONS.iter().find(|b| b.is_pushed(&sys)) {
-            sys.gpio_set(OUT_PIN).unwrap();
-            let (r, g, b) = button.color;
-            lp5562.set_color(r, g, b).unwrap();
-        } else {
-            sys.gpio_reset(OUT_PIN).unwrap();
-            lp5562.set_color(255, 0, 0).unwrap();
+        let result = sys_recv_closed(&mut [], EXTI3 | EXTI9_5 | EXTI15_10 | TIMER_EXPIRED, TaskId::KERNEL).unwrap();
+        match result.operation {
+            TIMER_EXPIRED => lp5562.disable_backlight().unwrap(),
+            _ => {
+                if let Some(button) = BUTTONS.iter().find(|b| b.is_pushed(&sys)) {
+                    lp5562.enable_backlight().unwrap();
+                    sys_set_timer(Some(sys_get_timer().now + BACKLIGHT_DURATION), TIMER_EXPIRED);
+                    sys.gpio_set(OUT_PIN).unwrap();
+                    let (r, g, b) = button.color;
+                    lp5562.set_color(r, g, b).unwrap();
+                } else {
+                    sys.gpio_reset(OUT_PIN).unwrap();
+                    lp5562.set_color(255, 0, 0).unwrap();
+                }
+                exti.pr1.write(|w| unsafe { w.bits(0xffffffff) });
+                sys_irq_control(result.operation, true);
+            }
         }
-        exti.pr1.write(|w| unsafe { w.bits(0xffffffff) });
-        sys_irq_control(result.operation, true);
     }
 }
 

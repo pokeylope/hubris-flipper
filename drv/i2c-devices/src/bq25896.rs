@@ -65,11 +65,11 @@ impl Bq25896 {
         self.write_reg(register, val)
     }
 
-    fn clear_bit(&self, register: Register, bit: u8)  -> Result<(), ResponseCode> {
-        let mut val = self.read_reg(register)?;
-        val &= !(1 << bit);
-        self.write_reg(register, val)
-    }
+    //fn clear_bit(&self, register: Register, bit: u8)  -> Result<(), ResponseCode> {
+    //    let mut val = self.read_reg(register)?;
+    //    val &= !(1 << bit);
+    //    self.write_reg(register, val)
+    //}
 
     fn reset(&self) -> Result<(), ResponseCode> {
         self.write_reg(Register::R14, 1 << 7)

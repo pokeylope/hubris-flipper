@@ -68,6 +68,7 @@ priority = 3
 start = true
 task-slots = ["sys", "i2c_driver", "spi_driver"]
 uses = ["syscfg", "exti"]
+stacksize = 2048
 
 [tasks.input.interrupts]
 "exti.exti3" = 0b0000_0001

@@ -46,9 +46,9 @@ impl Lp5562 {
         Self { device: *device }
     }
 
-    fn read_reg(&self, register: Register) -> Result<u8, ResponseCode> {
-        self.device.read_reg(register as u8)
-    }
+    //fn read_reg(&self, register: Register) -> Result<u8, ResponseCode> {
+    //    self.device.read_reg(register as u8)
+    //}
 
     fn write_reg(
         &self,
@@ -102,5 +102,13 @@ impl Lp5562 {
         self.write_reg(Register::GPwm, green)?;
         self.write_reg(Register::RPwm, red)?;
         Ok(())
+    }
+
+    pub fn enable_backlight(&self) -> Result<(), ResponseCode> {
+        self.write_reg(Register::WPwm, 0xff)
+    }
+
+    pub fn disable_backlight(&self) -> Result<(), ResponseCode> {
+        self.write_reg(Register::WPwm, 0)
     }
 }
