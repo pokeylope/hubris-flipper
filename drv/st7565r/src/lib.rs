@@ -112,9 +112,9 @@ where
         }
     }
 
-    fn write_data(&self, data: u8) -> Result<(), SpiError> {
+    fn write_data(&self, data: &[u8]) -> Result<(), SpiError> {
         self.set_mode(Mode::Data);
-        self.spi.write(&[data])
+        self.spi.write(data)
     }
 
     fn set_page(&self, page: u8) -> Result<(), SpiError> {
@@ -130,11 +130,9 @@ where
         for page in 0..PAGES {
             self.set_page(page as u8)?;
             self.set_col(0)?;
-            for col in 0..WIDTH {
-                self.write_data(
-                    self.display.framebuffer[(page * WIDTH + col) as usize],
-                )?;
-            }
+            let start = (page * WIDTH) as usize;
+            let end = start + WIDTH as usize;
+            self.write_data(&self.display.framebuffer[start..end])?;
         }
         Ok(())
     }
