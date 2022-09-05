@@ -1,0 +1,47 @@
+Interface(
+    name: "Display",
+    ops: {
+        "draw_pixels": (
+            leases: {
+                "pixels": (type: "[DisplayPixel]", read: true, max_len: Some(128)),
+            },
+            reply: Result(
+               ok: "()",
+               err: CLike("DisplayError"),
+            ),
+            idempotent: true,
+        ),
+        "fill_solid": (
+            args: {
+                "area": "DisplayRectangle",
+                "color": "DisplayColorStorage",
+            },
+            reply: Result(
+               ok: "()",
+               err: CLike("DisplayError"),
+            ),
+            idempotent: true,
+        ),
+        "clear": (
+            args: {
+                "color": "DisplayColorStorage",
+            },
+            reply: Result(
+               ok: "()",
+               err: CLike("DisplayError"),
+            ),
+            idempotent: true,
+        ),
+        "flush": (
+            reply: Result(
+               ok: "()",
+               err: CLike("DisplayError"),
+            ),
+            idempotent: true,
+        ),
+        "size": (
+            reply: Simple("DisplaySize"),
+            idempotent: true,
+        ),
+    },
+)

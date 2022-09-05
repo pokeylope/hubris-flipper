@@ -7,10 +7,8 @@
 
 use core::convert::From;
 use drv_i2c_devices::lp5562::*;
-use drv_spi_api::Spi;
 use drv_stm32xx_sys_api::*;
 use stm32wb::stm32wb55 as device;
-use st7565r::{Mode, St7565r};
 use userlib::*;
 
 const BACKLIGHT_DURATION: u64 = 10 * 1000;
@@ -45,7 +43,6 @@ const BUTTONS: [Button; 6] = [
 
 include!(concat!(env!("OUT_DIR"), "/i2c_config.rs"));
 task_slot!(I2C, i2c_driver);
-task_slot!(SPI, spi_driver);
 task_slot!(SYS, sys);
 
 const EXTI3: u32 = 1 << 0;
@@ -54,8 +51,6 @@ const EXTI15_10: u32 = 1 << 2;
 const TIMER_EXPIRED: u32 = 1 << 3;
 
 const OUT_PIN: PinSet = Port::A.pin(6);
-const DISPLAY_RST_N: PinSet = Port::B.pin(0);
-const DISPLAY_DI: PinSet = Port::B.pin(1);
 
 #[export_name = "main"]
 fn main() -> ! {
@@ -68,21 +63,6 @@ fn main() -> ! {
         Pull::None,
     )
     .unwrap();
-    sys.gpio_configure_output(
-        DISPLAY_RST_N,
-        OutputType::PushPull,
-        Speed::Low,
-        Pull::None,
-    )
-    .unwrap();
-    sys.gpio_configure_output(
-        DISPLAY_DI,
-        OutputType::PushPull,
-        Speed::Low,
-        Pull::None,
-    )
-    .unwrap();
-    sys.gpio_set(DISPLAY_RST_N).unwrap();
 
     let p = device::Peripherals::take().unwrap();
     let syscfg = p.SYSCFG;
@@ -98,15 +78,6 @@ fn main() -> ! {
     lp5562.initialize().unwrap();
     lp5562.set_color(255, 0, 0).unwrap();
     lp5562.enable_backlight().unwrap();
-
-    let spi = Spi::from(SPI.get_task_id()).device(0);
-    let toggle_di = |mode| match mode {
-        Mode::Command => sys.gpio_reset(DISPLAY_DI).unwrap(),
-        Mode::Data => sys.gpio_set(DISPLAY_DI).unwrap(),
-    };
-    let mut st7565r = St7565r::new(spi, toggle_di);
-    st7565r.initialize().unwrap();
-    st7565r.test().unwrap();
 
     sys_irq_control(EXTI3, true);
     sys_irq_control(EXTI9_5, true);

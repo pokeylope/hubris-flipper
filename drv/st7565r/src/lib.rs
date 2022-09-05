@@ -57,7 +57,7 @@ where
     spi: SpiDevice,
     mode: Cell<Mode>,
     toggle_di: F,
-    display: St7565rDisplay,
+    pub display: St7565rDisplay,
 }
 
 impl<F> St7565r<F>
@@ -126,7 +126,7 @@ where
         self.write(Command::SetColumnLsb(col & 0xf))
     }
 
-    fn flush(&self) -> Result<(), SpiError> {
+    pub fn flush(&self) -> Result<(), SpiError> {
         for page in 0..PAGES {
             self.set_page(page as u8)?;
             self.set_col(0)?;
@@ -172,7 +172,7 @@ where
     }
 }
 
-struct St7565rDisplay {
+pub struct St7565rDisplay {
     framebuffer: [u8; FB_SIZE],
 }
 
@@ -215,7 +215,7 @@ impl DrawTarget for St7565rDisplay {
     fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
         let val = match color {
             BinaryColor::Off => 0,
-            BinaryColor::On => 1,
+            BinaryColor::On => 0xff,
         };
         self.framebuffer.fill(val);
 

@@ -1,5 +1,5 @@
 [package]
-name = "drv-user-leds-api"
+name = "drv-display-api"
 version = "0.1.0"
 edition = "2018"
 
@@ -17,4 +17,4 @@ test = false
 bench = false
 
 [build-dependencies]
-idol = {git = "https://github.com/oxidecomputer/idolatry.git"}
+idol = {git = "https://github.com/pokeylope/idolatry.git"}

@@ -62,28 +62,41 @@ global_config = "spi2"
 "i2c1.event" = 0b0000_0001
 "i2c1.error" = 0b0000_0001
 
+[tasks.display]
+name = "drv-flipper-display-server"
+priority = 3
+start = true
+task-slots = ["sys", "spi_driver"]
+stacksize = 4096
+
 [tasks.input]
 name = "drv-flipper-input"
 priority = 3
 start = true
-task-slots = ["sys", "i2c_driver", "spi_driver"]
+task-slots = ["sys", "i2c_driver"]
 uses = ["syscfg", "exti"]
-stacksize = 2048
 
 [tasks.input.interrupts]
 "exti.exti3" = 0b0000_0001
 "exti.exti9_5" = 0b0000_0010
 "exti.exti15_10" = 0b0000_0100
 
+[tasks.demo]
+name = "task-flipper-demo"
+priority = 4
+start = true
+task-slots = ["display"]
+stacksize = 2048
+
 [tasks.blink]
 name = "task-blink"
-priority = 4
+priority = 5
 start = true
 task-slots = ["sys", "i2c_driver"]
 
 [tasks.idle]
 name = "task-idle"
-priority = 5
+priority = 6
 max-sizes = {flash = 128, ram = 256}
 stacksize = 256
 start = true
