@@ -278,6 +278,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79c2681d6594606957bbb8631c4b90a7fcaaa72cdb714743a437b156d6a7eedd"
 
 [[package]]
+name = "cc1101"
+version = "0.1.0"
+dependencies = [
+ "drv-spi-api",
+ "userlib",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3248,6 +3256,17 @@ name = "task-flipper-demo"
 version = "0.1.0"
 dependencies = [
  "drv-display-api",
+ "embedded-graphics",
+ "userlib",
+]
+
+[[package]]
+name = "task-flipper-spectrum-analyzer"
+version = "0.1.0"
+dependencies = [
+ "cc1101",
+ "drv-display-api",
+ "drv-spi-api",
  "embedded-graphics",
  "userlib",
 ]

@@ -17,7 +17,7 @@ use embedded_graphics::prelude::*;
 const DISPLAY_RST_N: PinSet = Port::B.pin(0);
 const DISPLAY_DI: PinSet = Port::B.pin(1);
 
-task_slot!(SPI, spi_driver);
+task_slot!(SPI, spi2_driver);
 task_slot!(SYS, sys);
 
 #[export_name = "main"]

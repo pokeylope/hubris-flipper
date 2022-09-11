@@ -6,7 +6,7 @@ stacksize = 896
 
 [kernel]
 name = "flipper-zero"
-requires = {flash = 20000, ram = 3072}
+requires = {flash = 20000, ram = 3136}
 #
 # For the kernel (and for any task that logs), we are required to enable
 # either "itm" (denoting logging/panicking via ARM's Instrumentation Trace
@@ -44,7 +44,21 @@ uses = ["i2c1"]
 start = true
 task-slots = ["sys"]
 
-[tasks.spi_driver]
+[tasks.spi1_driver]
+name = "drv-stm32wb-spi-server"
+priority = 2
+max-sizes = {flash = 16384, ram = 2048}
+features = ["spi1", "wb55"]
+uses = ["spi1"]
+start = true
+interrupts = {"spi1.irq" = 1}
+stacksize = 880
+task-slots = ["sys"]
+
+[tasks.spi1_driver.config.spi]
+global_config = "spi1"
+
+[tasks.spi2_driver]
 name = "drv-stm32wb-spi-server"
 priority = 2
 max-sizes = {flash = 16384, ram = 2048}
@@ -55,7 +69,7 @@ interrupts = {"spi2.irq" = 1}
 stacksize = 880
 task-slots = ["sys"]
 
-[tasks.spi_driver.config.spi]
+[tasks.spi2_driver.config.spi]
 global_config = "spi2"
 
 [tasks.i2c_driver.interrupts]
@@ -66,7 +80,7 @@ global_config = "spi2"
 name = "drv-flipper-display-server"
 priority = 3
 start = true
-task-slots = ["sys", "spi_driver"]
+task-slots = ["sys", "spi2_driver"]
 stacksize = 4096
 
 [tasks.input]
@@ -81,12 +95,19 @@ uses = ["syscfg", "exti"]
 "exti.exti9_5" = 0b0000_0010
 "exti.exti15_10" = 0b0000_0100
 
-[tasks.demo]
-name = "task-flipper-demo"
+#[tasks.demo]
+#name = "task-flipper-demo"
+#priority = 4
+#start = true
+#task-slots = ["display"]
+#stacksize = 2048
+
+[tasks.spectrum_analyzer]
+name = "task-flipper-spectrum-analyzer"
 priority = 4
 start = true
-task-slots = ["display"]
-stacksize = 2048
+task-slots = ["display", "spi1_driver"]
+stacksize = 3072
 
 [tasks.blink]
 name = "task-blink"
@@ -102,6 +123,22 @@ stacksize = 256
 start = true
 
 [config]
+[config.spi.spi1]
+controller = 1
+fifo_depth = 4
+
+[config.spi.spi1.mux_options.subghz]
+outputs = [
+    {port = "A", pins = [5], af = 5},
+    {port = "B", pins = [5], af = 5},
+]
+input = {port = "B", pin = 4, af = 5}
+
+[config.spi.spi1.devices.subghz]
+mux = "subghz"
+cs = [{port = "D", pin = 0}]
+clock_divider = "Div8"
+
 [config.spi.spi2]
 controller = 2
 fifo_depth = 4

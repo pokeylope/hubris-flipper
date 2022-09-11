@@ -11,7 +11,7 @@ use drv_stm32xx_sys_api::*;
 use stm32wb::stm32wb55 as device;
 use userlib::*;
 
-const BACKLIGHT_DURATION: u64 = 10 * 1000;
+const BACKLIGHT_DURATION: u64 = 30 * 1000;
 
 struct Button {
     pinset: PinSet,

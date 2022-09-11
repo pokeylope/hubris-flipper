@@ -1,0 +1,18 @@
+[package]
+name = "task-flipper-spectrum-analyzer"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+userlib = {path = "../../sys/userlib", features = ["panic-messages"]}
+drv-display-api = { path = "../../drv/display-api" }
+drv-spi-api = { path = "../../drv/spi-api" }
+cc1101 = { path = "../../drv/cc1101" }
+embedded-graphics = "0.7.1"
+
+# This section is here to discourage RLS/rust-analyzer from doing test builds,
+# since test builds don't work for cross compilation.
+[[bin]]
+name = "task-flipper-spectrum-analyzer"
+test = false
+bench = false
