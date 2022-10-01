@@ -667,7 +667,7 @@ version = "0.1.0"
 dependencies = [
  "derive-idol-err",
  "embedded-graphics",
- "idol 0.2.0 (git+https://github.com/pokeylope/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -681,7 +681,7 @@ dependencies = [
  "derive-idol-err",
  "drv-i2c-api",
  "drv-i2c-devices",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "userlib",
@@ -696,7 +696,7 @@ dependencies = [
  "drv-spi-api",
  "drv-stm32xx-sys-api",
  "embedded-graphics",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "st7565r",
@@ -712,7 +712,7 @@ dependencies = [
  "drv-i2c-api",
  "drv-i2c-devices",
  "drv-stm32xx-sys-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
  "userlib",
 ]
@@ -722,7 +722,7 @@ name = "drv-fpga-api"
 version = "0.1.0"
 dependencies = [
  "drv-spi-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "userlib",
@@ -760,7 +760,7 @@ dependencies = [
  "drv-spi-api",
  "drv-stm32xx-sys-api",
  "gnarle",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "ringbuf",
@@ -774,7 +774,7 @@ version = "0.1.0"
 dependencies = [
  "derive-idol-err",
  "drv-hash-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -791,7 +791,7 @@ dependencies = [
  "drv-hash-api",
  "drv-stm32h7-qspi",
  "drv-stm32xx-sys-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "stm32h7",
@@ -805,7 +805,7 @@ version = "0.1.0"
 dependencies = [
  "derive-idol-err",
  "drv-gimlet-state",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -830,7 +830,7 @@ dependencies = [
  "drv-stm32h7-spi",
  "drv-stm32xx-sys-api",
  "gnarle",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "ringbuf",
@@ -856,7 +856,7 @@ name = "drv-hash-api"
 version = "0.1.0"
 dependencies = [
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -903,7 +903,7 @@ version = "0.1.0"
 dependencies = [
  "drv-lpc55-gpio-api",
  "drv-lpc55-syscon-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "lpc55-pac",
  "num-traits",
@@ -918,7 +918,7 @@ dependencies = [
  "build-util",
  "cfg-if",
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -943,7 +943,7 @@ dependencies = [
  "cfg-if",
  "drv-lpc55-syscon-api",
  "drv-rng-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "lpc55-pac",
  "num-traits",
@@ -993,7 +993,7 @@ dependencies = [
  "drv-lpc55-spi",
  "drv-lpc55-syscon-api",
  "drv-sp-ctrl-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "lpc55-pac",
  "num-traits",
@@ -1010,7 +1010,7 @@ version = "0.1.0"
 dependencies = [
  "cortex-m",
  "drv-lpc55-syscon-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "lpc55-pac",
  "num-traits",
@@ -1024,7 +1024,7 @@ version = "0.1.0"
 dependencies = [
  "build-util",
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -1054,7 +1054,7 @@ dependencies = [
  "drv-meanwell-api",
  "drv-stm32xx-sys-api",
  "drv-user-leds-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "userlib",
@@ -1066,7 +1066,7 @@ name = "drv-meanwell-api"
 version = "0.1.0"
 dependencies = [
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -1097,7 +1097,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "getrandom",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num",
  "num-traits",
  "rand_core",
@@ -1153,7 +1153,7 @@ dependencies = [
  "derive-idol-err",
  "drv-fpga-api",
  "drv-sidecar-mainboard-controller",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -1174,7 +1174,7 @@ dependencies = [
  "drv-sidecar-front-io",
  "drv-sidecar-mainboard-controller",
  "drv-sidecar-seq-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "ringbuf",
@@ -1187,7 +1187,7 @@ name = "drv-sp-ctrl-api"
 version = "0.1.0"
 dependencies = [
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -1198,7 +1198,7 @@ name = "drv-spi-api"
 version = "0.1.0"
 dependencies = [
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -1271,7 +1271,7 @@ dependencies = [
  "drv-hash-api",
  "drv-stm32h7-hash",
  "drv-stm32xx-sys-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "stm32h7",
@@ -1331,7 +1331,7 @@ version = "0.1.0"
 dependencies = [
  "drv-rng-api",
  "drv-stm32xx-sys-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "stm32h7",
@@ -1361,7 +1361,7 @@ dependencies = [
  "drv-spi-api",
  "drv-stm32h7-spi",
  "drv-stm32xx-sys-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "indexmap",
  "num-traits",
@@ -1415,7 +1415,7 @@ dependencies = [
  "drv-spi-api",
  "drv-stm32wb-spi",
  "drv-stm32xx-sys-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "indexmap",
  "num-traits",
@@ -1449,7 +1449,7 @@ dependencies = [
  "cfg-if",
  "drv-stm32xx-gpio-common",
  "drv-stm32xx-sys-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "stm32g0",
@@ -1467,7 +1467,7 @@ dependencies = [
  "cfg-if",
  "derive-idol-err",
  "drv-stm32xx-gpio-common",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -1485,7 +1485,7 @@ name = "drv-update-api"
 version = "0.1.0"
 dependencies = [
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -1500,7 +1500,7 @@ dependencies = [
  "drv-lpc55-gpio-api",
  "drv-stm32xx-sys-api",
  "drv-user-leds-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "lpc55-pac",
  "num-traits",
@@ -1516,7 +1516,7 @@ version = "0.1.0"
 dependencies = [
  "derive-idol-err",
  "embedded-graphics",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -1936,19 +1936,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "idol"
 version = "0.2.0"
-source = "git+https://github.com/oxidecomputer/idolatry.git#994077e3ecff3ec6df15c082fc4f810cf27c97f2"
-dependencies = [
- "indexmap",
- "quote",
- "ron 0.7.0",
- "serde",
- "toml",
-]
-
-[[package]]
-name = "idol"
-version = "0.2.0"
-source = "git+https://github.com/pokeylope/idolatry.git#cb303a0e4abd519e80ba15806ca20c993ad6e719"
+source = "git+https://github.com/oxidecomputer/idolatry.git#4f326545f20b020869c3deaed28070b853e44a64"
 dependencies = [
  "indexmap",
  "quote",
@@ -1960,7 +1948,7 @@ dependencies = [
 [[package]]
 name = "idol-runtime"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/idolatry.git#994077e3ecff3ec6df15c082fc4f810cf27c97f2"
+source = "git+https://github.com/oxidecomputer/idolatry.git#4f326545f20b020869c3deaed28070b853e44a64"
 dependencies = [
  "userlib",
  "zerocopy",
@@ -3126,7 +3114,7 @@ name = "stm32h7-update-server"
 version = "0.1.0"
 dependencies = [
  "drv-update-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "ringbuf",
@@ -3320,7 +3308,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-semihosting 0.5.0",
  "hubris-num-tasks",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "ringbuf",
@@ -3335,7 +3323,7 @@ name = "task-jefe-api"
 version = "0.1.0"
 dependencies = [
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -3369,7 +3357,7 @@ dependencies = [
  "drv-spi-api",
  "drv-stm32xx-sys-api",
  "drv-user-leds-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "monorail-api",
  "num-traits",
@@ -3400,7 +3388,7 @@ dependencies = [
  "drv-stm32xx-uid",
  "drv-user-leds-api",
  "hubris-num-tasks",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "ksz8463",
  "mutable-statics",
@@ -3427,7 +3415,7 @@ version = "0.1.0"
 dependencies = [
  "build-net",
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "serde",
@@ -3487,7 +3475,7 @@ dependencies = [
  "cortex-m",
  "drv-i2c-api",
  "drv-i2c-devices",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "ringbuf",
@@ -3502,7 +3490,7 @@ version = "0.1.0"
 dependencies = [
  "derive-idol-err",
  "drv-i2c-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -3549,7 +3537,7 @@ dependencies = [
  "drv-onewire",
  "drv-onewire-devices",
  "drv-sidecar-seq-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "ringbuf",
@@ -3564,7 +3552,7 @@ name = "task-thermal-api"
 version = "0.1.0"
 dependencies = [
  "derive-idol-err",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -3616,7 +3604,7 @@ dependencies = [
  "cortex-m",
  "drv-i2c-api",
  "drv-i2c-devices",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "ringbuf",
@@ -3631,7 +3619,7 @@ version = "0.1.0"
 dependencies = [
  "derive-idol-err",
  "drv-i2c-api",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "userlib",
  "zerocopy",
@@ -3673,7 +3661,7 @@ dependencies = [
 name = "test-idol-api"
 version = "0.1.0"
 dependencies = [
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "num-traits",
  "serde",
  "ssmarshal",
@@ -3686,7 +3674,7 @@ name = "test-idol-server"
 version = "0.1.0"
 dependencies = [
  "build-util",
- "idol 0.2.0 (git+https://github.com/oxidecomputer/idolatry.git)",
+ "idol",
  "idol-runtime",
  "num-traits",
  "serde",
