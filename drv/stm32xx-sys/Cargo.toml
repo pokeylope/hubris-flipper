@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bitflags = "1.2.1"
 userlib = {path = "../../sys/userlib"}
 zerocopy = "0.6.1"
 num-traits = { version = "0.2.12", default-features = false }
@@ -13,6 +14,7 @@ stm32wb = {version = "0.15.1", default-features = false, optional = true}
 idol-runtime = {git = "https://github.com/oxidecomputer/idolatry.git"}
 drv-stm32xx-sys-api = {path = "../stm32xx-sys-api"}
 drv-stm32xx-gpio-common = {path = "../stm32xx-gpio-common", features = ["server-support"]}
+task-jefe-api = {path="../../task/jefe-api"}
 cfg-if = "1"
 
 [build-dependencies]
@@ -24,6 +26,7 @@ h743 = ["family-stm32h7", "stm32h7/stm32h743", "drv-stm32xx-sys-api/h743", "drv-
 h753 = ["family-stm32h7", "stm32h7/stm32h753", "drv-stm32xx-sys-api/h753", "drv-stm32xx-gpio-common/model-stm32h753"]
 
 family-stm32g0 = ["stm32g0"]
+g030 = ["family-stm32g0", "stm32g0/stm32g030", "drv-stm32xx-sys-api/g030", "drv-stm32xx-gpio-common/model-stm32g030"]
 g031 = ["family-stm32g0", "stm32g0/stm32g031", "drv-stm32xx-sys-api/g031", "drv-stm32xx-gpio-common/model-stm32g031"]
 g070 = ["family-stm32g0", "stm32g0/stm32g070", "drv-stm32xx-sys-api/g070", "drv-stm32xx-gpio-common/model-stm32g070"]
 g0b1 = ["family-stm32g0", "stm32g0/stm32g0b1", "drv-stm32xx-sys-api/g0b1", "drv-stm32xx-gpio-common/model-stm32g0b1"]

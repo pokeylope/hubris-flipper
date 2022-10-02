@@ -1,8 +1,8 @@
 name = "demo-stm32g031-nucleo"
 target = "thumbv6m-none-eabi"
 chip = "../../chips/stm32g0"
-memory = "memory-g031.toml"
-board = "stm32g031"
+memory = "memory-g031x8.toml"
+board = "stm32g031-nucleo"
 
 [kernel]
 name = "demo-stm32g0-nucleo"
@@ -26,6 +26,7 @@ uses = ["rcc", "gpio"]
 start = true
 features = ["g031"]
 stacksize = 256
+task-slots = ["jefe"]
 
 [tasks.pong]
 name = "task-pong"

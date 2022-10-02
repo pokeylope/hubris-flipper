@@ -119,8 +119,6 @@ const PARK_BIT: u8 = 0;
 const START_VAL: u8 = 1 << START_BIT;
 const PARK_VAL: u8 = 1 << PARK_BIT;
 
-const IRQ_MASK: u32 = 1;
-
 #[derive(Copy, Clone, PartialEq)]
 enum Port {
     DP = 0,
@@ -181,6 +179,8 @@ enum RawSwdReg {
 
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq)]
+// Be picky and match the spec
+#[allow(clippy::upper_case_acronyms)]
 enum ApReg {
     CSW = 0x0,
     TAR = 0x4,
@@ -339,18 +339,20 @@ impl idl::InOrderSpCtrlImpl for ServerImpl {
 
         for i in 0..cnt / 4 {
             let mut word: [u8; 4] = [0; 4];
-            for j in 0..4 {
+            for item in &mut word {
                 match buf.read() {
-                    Some(b) => word[j] = b,
+                    Some(b) => *item = b,
                     None => return Ok(()),
                 };
             }
-            match self.write_single_target_addr(
-                addr + ((i * 4) as u32),
-                u32::from_le_bytes(word),
-            ) {
-                Err(_) => return Err(SpCtrlError::Fault.into()),
-                _ => (),
+            if self
+                .write_single_target_addr(
+                    addr + ((i * 4) as u32),
+                    u32::from_le_bytes(word),
+                )
+                .is_err()
+            {
+                return Err(SpCtrlError::Fault.into());
             }
         }
 
@@ -377,12 +379,12 @@ impl idl::InOrderSpCtrlImpl for ServerImpl {
 impl ServerImpl {
     fn io_out(&mut self) {
         self.wait_for_mstidle();
-        switch_io_out(self.gpio);
+        switch_io_out();
     }
 
     fn io_in(&mut self) {
         self.wait_for_mstidle();
-        switch_io_in(self.gpio);
+        switch_io_in();
     }
 
     fn read_ack(&mut self) -> Result<(), Ack> {
@@ -415,30 +417,25 @@ impl ServerImpl {
         }
     }
 
+    // We purposely poll on these functions instead of waiting for an interrupt
+    // because the overhead of the system calls is much higher than the number
+    // of cycles we expect to wait given the throughput.
+
     fn wait_to_tx(&mut self) {
         while !self.spi.can_tx() {
-            self.spi.enable_tx();
-            sys_irq_control(IRQ_MASK, true);
-            let _ = sys_recv_closed(&mut [], IRQ_MASK, TaskId::KERNEL);
-            self.spi.disable_tx();
+            cortex_m::asm::nop();
         }
     }
 
     fn wait_for_rx(&mut self) {
         while !self.spi.has_byte() {
-            self.spi.enable_rx();
-            sys_irq_control(IRQ_MASK, true);
-            let _ = sys_recv_closed(&mut [], IRQ_MASK, TaskId::KERNEL);
-            self.spi.disable_rx();
+            cortex_m::asm::nop();
         }
     }
 
     fn wait_for_mstidle(&mut self) {
         while !self.spi.mstidle() {
-            self.spi.mstidle_enable();
-            sys_irq_control(IRQ_MASK, true);
-            let _ = sys_recv_closed(&mut [], IRQ_MASK, TaskId::KERNEL);
-            self.spi.mstidle_disable();
+            cortex_m::asm::nop();
         }
     }
 
@@ -657,17 +654,14 @@ impl ServerImpl {
         loop {
             let result = self.swd_transfer_cmd(port, reg);
 
-            match result {
-                Err(e) => {
-                    // Need to account for the turnaround bit before continuing
-                    self.io_out();
-                    self.idle_cycles(8);
-                    match e {
-                        Ack::Wait => continue,
-                        _ => return Err(e),
-                    }
+            if let Err(e) = result {
+                // Need to account for the turnaround bit before continuing
+                self.io_out();
+                self.idle_cycles(8);
+                match e {
+                    Ack::Wait => continue,
+                    _ => return Err(e),
                 }
-                _ => (),
             }
 
             self.io_out();

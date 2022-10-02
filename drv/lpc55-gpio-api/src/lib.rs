@@ -139,52 +139,28 @@ pub enum Mode {
     Repeater = 3,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, FromPrimitive)]
 pub enum Digimode {
     Analog = 0,
     Digital = 1,
 }
 
-impl Into<bool> for Digimode {
-    fn into(self) -> bool {
-        self == Self::Digital
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, FromPrimitive)]
 pub enum Slew {
     Standard = 0,
     Fast = 1,
 }
 
-impl Into<bool> for Slew {
-    fn into(self) -> bool {
-        self == Self::Fast
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, FromPrimitive)]
 pub enum Invert {
     Disable = 0,
     Enabled = 1,
 }
 
-impl Into<bool> for Invert {
-    fn into(self) -> bool {
-        self == Self::Enabled
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, FromPrimitive)]
 pub enum Opendrain {
     Normal = 0,
     Opendrain = 1,
-}
-
-impl Into<bool> for Opendrain {
-    fn into(self) -> bool {
-        self == Self::Opendrain
-    }
 }
 
 #[derive(Copy, Clone, Debug, FromPrimitive)]
@@ -232,6 +208,29 @@ pub enum GpioError {
 }
 
 impl Pins {
+    // Calling into the GPIO task each time can be slow, this function
+    // allows tasks to get the appropriate values to write manually.
+    pub fn iocon_conf_val(
+        pin: Pin,
+        alt: AltFn,
+        mode: Mode,
+        slew: Slew,
+        invert: Invert,
+        digimode: Digimode,
+        od: Opendrain,
+    ) -> (u32, u32) {
+        // This is the format specified by the LPC55 manual. Trying to pass
+        // each of the enums individually would get expensive space wise!
+        let conf = (alt as u32)
+            | (mode as u32) << 4
+            | (slew as u32) << 6
+            | (invert as u32) << 7
+            | (digimode as u32) << 8
+            | (od as u32) << 9;
+
+        (pin as u32, conf)
+    }
+
     pub fn iocon_configure(
         &self,
         pin: Pin,
@@ -242,14 +241,8 @@ impl Pins {
         digimode: Digimode,
         od: Opendrain,
     ) -> Result<(), GpioError> {
-        // This is the format specified by the LPC55 manual. Trying to pass
-        // each of the enums individually would get expensive space wise!
-        let conf = (alt as u32)
-            | (mode as u32) << 4
-            | (slew as u32) << 6
-            | (invert as u32) << 7
-            | (digimode as u32) << 8
-            | (od as u32) << 9;
+        let (_, conf) =
+            Pins::iocon_conf_val(pin, alt, mode, slew, invert, digimode, od);
 
         self.iocon_configure_raw(pin, conf)
     }

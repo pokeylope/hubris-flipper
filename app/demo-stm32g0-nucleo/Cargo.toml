@@ -7,6 +7,7 @@ version = "0.1.0"
 [features]
 itm = ["panic-itm"]
 semihosting = ["panic-semihosting"]
+g030 = ["stm32g0/stm32g030"]
 g031 = ["stm32g0/stm32g031"]
 g070 = ["stm32g0/stm32g070"]
 g0b1 = ["stm32g0/stm32g0b1"]

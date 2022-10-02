@@ -7,9 +7,11 @@ use std::hash::Hasher;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use indexmap::IndexMap;
 use serde::Deserialize;
+
+use crate::auxflash::{build_auxflash, AuxFlash, AuxFlashData};
 
 /// A `RawConfig` represents an `app.toml` file that has been deserialized,
 /// but may not be ready for use.  In particular, we use the `chip` field
@@ -36,6 +38,9 @@ struct RawConfig {
     extratext: IndexMap<String, Peripheral>,
     #[serde(default)]
     config: Option<ordered_toml::Value>,
+    #[serde(default)]
+    secure_task: Option<String>,
+    auxflash: Option<AuxFlash>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +62,8 @@ pub struct Config {
     pub config: Option<ordered_toml::Value>,
     pub buildhash: u64,
     pub app_toml_path: PathBuf,
+    pub secure_task: Option<String>,
+    pub auxflash: Option<AuxFlashData>,
 }
 
 impl Config {
@@ -88,7 +95,10 @@ impl Config {
                 "memory.toml".to_string()
             };
             let chip_file = cfg.parent().unwrap().join(&toml.chip).join(fname);
-            let chip_contents = std::fs::read(chip_file)?;
+            let chip_contents =
+                std::fs::read(&chip_file).with_context(|| {
+                    format!("reading chip file {}", chip_file.display())
+                })?;
             hasher.write(&chip_contents);
             toml::from_slice::<IndexMap<String, Vec<Output>>>(&chip_contents)?
         };
@@ -99,6 +109,13 @@ impl Config {
             vec!["default".to_string()]
         } else {
             toml.image_names
+        };
+
+        // Build the auxiliary flash data so that we can inject it as an
+        // environmental variable in the build system.
+        let auxflash = match &toml.auxflash {
+            Some(a) => Some(build_auxflash(a)?),
+            None => None,
         };
 
         Ok(Config {
@@ -117,8 +134,10 @@ impl Config {
             peripherals,
             extratext: toml.extratext,
             config: toml.config,
+            auxflash,
             buildhash,
             app_toml_path: cfg.to_owned(),
+            secure_task: toml.secure_task,
         })
     }
 
@@ -188,6 +207,18 @@ impl Config {
             "HUBRIS_APP_TOML".to_string(),
             app_toml_path.to_str().unwrap().to_string(),
         );
+        if let Some(aux) = &self.auxflash {
+            env.insert(
+                "HUBRIS_AUXFLASH_CHECKSUM".to_string(),
+                format!("{:?}", aux.chck),
+            );
+            for (name, checksum) in aux.checksums.iter() {
+                env.insert(
+                    format!("HUBRIS_AUXFLASH_CHECKSUM_{}", name),
+                    format!("{:?}", checksum),
+                );
+            }
+        }
 
         // secure_separation indicates that we have TrustZone enabled.
         // When TrustZone is enabled, the bootloader is secure and hubris is
@@ -309,13 +340,30 @@ impl Config {
             .collect()
     }
 
+    pub fn all_regions(
+        &self,
+        region: String,
+    ) -> Result<IndexMap<String, Range<u32>>> {
+        let outputs: &Vec<Output> = self
+            .outputs
+            .get(&region)
+            .ok_or_else(|| anyhow!("couldn't find region {}", region))?;
+        let mut memories: IndexMap<String, Range<u32>> = IndexMap::new();
+
+        for o in outputs {
+            memories.insert(o.name.clone(), o.address..o.address + o.size);
+        }
+
+        Ok(memories)
+    }
+
     pub fn image_memories(
         &self,
         region: String,
     ) -> Result<IndexMap<String, Range<u32>>> {
         let mut memories: IndexMap<String, Range<u32>> = IndexMap::new();
         for a in &self.external_images {
-            if let Some(r) = self.memories(&a)?.get(&region) {
+            if let Some(r) = self.memories(a)?.get(&region) {
                 memories.insert(a.clone(), r.start..r.end);
             }
         }
@@ -374,10 +422,15 @@ impl Config {
     pub fn check_image_name(&self, name: &String) -> bool {
         self.image_names.contains(name)
     }
+
+    pub fn need_tz_linker(&self, name: &str) -> bool {
+        self.tasks[name].uses_secure_entry
+            || self.secure_task.as_ref().map_or(false, |n| n == name)
+    }
 }
 
 /// Represents an MPU's desired alignment strategy
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum MpuAlignment {
     /// Regions should be power-of-two sized and aligned
     PowerOfTwo,
@@ -429,6 +482,14 @@ impl std::fmt::Display for SigningMethod {
 pub struct Signing {
     pub priv_key: PathBuf,
     pub root_cert: PathBuf,
+    #[serde(default)]
+    pub enable_dice: bool,
+    #[serde(default)]
+    pub dice_inc_nxp_cfg: bool,
+    #[serde(default)]
+    pub dice_cust_cfg: bool,
+    #[serde(default)]
+    pub dice_inc_sec_epoch: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -484,6 +545,8 @@ pub struct Task {
     pub task_slots: IndexMap<String, String>,
     #[serde(default)]
     pub config: Option<ordered_toml::Value>,
+    #[serde(default)]
+    pub uses_secure_entry: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]

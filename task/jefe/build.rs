@@ -8,16 +8,21 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 fn main() -> Result<()> {
-    idol::server::build_server_support(
+    let cfg = build_util::task_maybe_config::<Config>()?.unwrap_or_default();
+
+    let allowed_callers = build_util::task_ids()
+        .remap_allowed_caller_names_to_ids(&cfg.allowed_callers)?;
+
+    idol::server::build_restricted_server_support(
         "../../idl/jefe.idol",
         "server_stub.rs",
         idol::server::ServerStyle::InOrder,
+        &allowed_callers,
     )
     .unwrap();
 
     build_util::expose_m_profile();
 
-    let cfg = build_util::task_maybe_config::<Config>()?.unwrap_or_default();
     let out_dir = std::env::var("OUT_DIR")?;
     let dest_path = std::path::Path::new(&out_dir).join("jefe_config.rs");
     let mut out =
@@ -32,16 +37,9 @@ fn main() -> Result<()> {
         task, count
     )?;
     for (name, rec) in cfg.on_state_change {
-        writeln!(out, "    ({}::{}, 1 << {})", task, name, rec.bit_number)?;
+        writeln!(out, "    ({}::{}, 1 << {}),", task, name, rec.bit_number)?;
     }
     writeln!(out, "];")?;
-
-    write!(out, "pub(crate) const STATE_OWNER: Option<{}> = ", task)?;
-    if let Some(owner) = cfg.state_owner {
-        writeln!(out, "Some({}::{});", task, owner)?;
-    } else {
-        writeln!(out, "None;")?;
-    }
 
     Ok(())
 }
@@ -52,11 +50,11 @@ fn main() -> Result<()> {
 struct Config {
     /// Task requests to be notified on state change, as a map from task name to
     /// `StateChange` record.
-    on_state_change: BTreeMap<String, StateChange>,
-    /// Name of task responsible for state changes. If provided, a state change
-    /// request from any other task will result in that task being faulted.
     #[serde(default)]
-    state_owner: Option<String>,
+    on_state_change: BTreeMap<String, StateChange>,
+    /// Map of operation names to tasks allowed to call them.
+    #[serde(default)]
+    allowed_callers: BTreeMap<String, Vec<String>>,
 }
 
 /// Description of something a task wants done on state change.

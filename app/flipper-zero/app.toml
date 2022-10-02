@@ -34,9 +34,10 @@ priority = 1
 max-sizes = {flash = 4096, ram = 1024}
 uses = ["rcc", "gpios1", "gpios2", "gpios3"]
 start = true
+task-slots = ["jefe"]
 
 [tasks.i2c_driver]
-name = "drv-stm32h7-i2c-server"
+name = "drv-stm32xx-i2c-server"
 features = ["wb55"]
 priority = 2
 max-sizes = {flash = 16384, ram = 2048}

@@ -121,6 +121,8 @@ pub struct ServerImpl<'a> {
     client_waiting_to_send: [bool; SOCKET_COUNT],
     ifaces: [Interface<'static, VLanEthernet<'a>>; VLAN_COUNT],
     bsp: crate::bsp::Bsp,
+
+    mac: EthernetAddress,
 }
 
 impl<'a> ServerImpl<'a> {
@@ -156,6 +158,7 @@ impl<'a> ServerImpl<'a> {
         let sockets = generated::construct_sockets();
         assert_eq!(sockets.0.len(), VLAN_COUNT);
 
+        let start_mac = mac;
         for sockets in sockets.0.into_iter() {
             let neighbor_cache_storage = neighbor_cache_iter.next().unwrap();
             let neighbor_cache = smoltcp::iface::NeighborCache::new(
@@ -165,7 +168,7 @@ impl<'a> ServerImpl<'a> {
             let socket_storage = socket_storage_iter.next().unwrap();
             let builder = smoltcp::iface::InterfaceBuilder::new(
                 VLanEthernet {
-                    eth: &eth,
+                    eth,
                     vid: vid_iter.next().unwrap(),
                 },
                 &mut socket_storage[..],
@@ -192,7 +195,7 @@ impl<'a> ServerImpl<'a> {
                 socket_handles.iter().zip(&generated::SOCKET_PORTS)
             {
                 iface
-                    .get_socket::<UdpSocket>(h)
+                    .get_socket::<UdpSocket<'_>>(h)
                     .bind((ipv6_addr, port))
                     .map_err(|_| ())
                     .unwrap();
@@ -212,6 +215,7 @@ impl<'a> ServerImpl<'a> {
             socket_handles,
             ifaces,
             bsp,
+            mac: start_mac,
         }
     }
 
@@ -242,7 +246,7 @@ impl<'a> ServerImpl<'a> {
     }
 
     pub fn wake(&self) {
-        self.bsp.wake(&self.eth)
+        self.bsp.wake(self.eth)
     }
 
     fn get_handle(
@@ -270,7 +274,7 @@ impl<'a> ServerImpl<'a> {
         vlan_index: usize,
     ) -> Result<&mut UdpSocket<'static>, ClientError> {
         Ok(self.ifaces[vlan_index]
-            .get_socket::<UdpSocket>(self.get_handle(index, vlan_index)?))
+            .get_socket::<UdpSocket<'_>>(self.get_handle(index, vlan_index)?))
     }
 }
 
@@ -386,6 +390,10 @@ impl NetServer for ServerImpl<'_> {
 
     fn eth_bsp(&mut self) -> (&eth::Ethernet, &mut crate::bsp::Bsp) {
         (self.eth, &mut self.bsp)
+    }
+
+    fn base_mac_address(&self) -> &EthernetAddress {
+        &self.mac
     }
 }
 

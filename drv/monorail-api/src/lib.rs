@@ -37,7 +37,7 @@ pub struct PortCounters {
 
 /// Error-code-only version of [VscError], for use in RPC calls
 #[derive(
-    Copy, Clone, Debug, PartialEq, FromPrimitive, ToPrimitive, IdolError,
+    Copy, Clone, Debug, Eq, PartialEq, FromPrimitive, ToPrimitive, IdolError,
 )]
 #[repr(C)]
 pub enum MonorailError {
@@ -201,7 +201,7 @@ pub struct PhyStatus {
     pub media_link_up: LinkStatus,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, zerocopy::AsBytes, zerocopy::FromBytes)]
 #[repr(C)]
 pub struct MacTableEntry {
     pub mac: [u8; 6],
