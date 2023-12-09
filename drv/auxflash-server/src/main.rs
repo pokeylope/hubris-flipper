@@ -21,7 +21,6 @@ use drv_stm32h7_qspi::Qspi;
 use drv_stm32xx_sys_api as sys_api;
 
 task_slot!(SYS, sys);
-const QSPI_IRQ: u32 = 1;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -33,7 +32,9 @@ struct SlotReader<'a> {
 }
 
 impl<'a> TlvcRead for SlotReader<'a> {
-    fn extent(&self) -> Result<u64, TlvcReadError> {
+    type Error = core::convert::Infallible;
+
+    fn extent(&self) -> Result<u64, TlvcReadError<Self::Error>> {
         // Hard-coded slot size, on a per-board basis
         Ok(SLOT_SIZE as u64)
     }
@@ -41,7 +42,7 @@ impl<'a> TlvcRead for SlotReader<'a> {
         &self,
         offset: u64,
         dest: &mut [u8],
-    ) -> Result<(), TlvcReadError> {
+    ) -> Result<(), TlvcReadError<Self::Error>> {
         let addr: u32 = self.base + u32::try_from(offset).unwrap_lite();
         self.qspi.read_memory(addr, dest);
         Ok(())
@@ -58,10 +59,13 @@ fn main() -> ! {
     sys.leave_reset(sys_api::Peripheral::QuadSpi);
 
     let reg = unsafe { &*device::QUADSPI::ptr() };
-    let qspi = Qspi::new(reg, QSPI_IRQ);
+    let qspi = Qspi::new(reg, notifications::QSPI_IRQ_MASK);
 
     let clock = 5; // 200MHz kernel / 5 = 40MHz clock
-    qspi.configure(clock, 24); // 2**24 = 16MiB = 128Mib
+    const MEMORY_SIZE: usize = SLOT_COUNT as usize * SLOT_SIZE;
+    assert!(MEMORY_SIZE.is_power_of_two());
+    let memory_size_log2 = MEMORY_SIZE.trailing_zeros().try_into().unwrap();
+    qspi.configure(clock, memory_size_log2);
 
     // Sidecar-only for now!
     //
@@ -80,34 +84,30 @@ fn main() -> ! {
         sys_api::Speed::Medium,
         sys_api::Pull::None,
         sys_api::Alternate::AF9,
-    )
-    .unwrap();
+    );
     sys.gpio_configure_alternate(
         sys_api::Port::F.pin(8).and_pin(9),
         sys_api::OutputType::PushPull,
         sys_api::Speed::Medium,
         sys_api::Pull::None,
         sys_api::Alternate::AF10,
-    )
-    .unwrap();
+    );
     sys.gpio_configure_alternate(
         sys_api::Port::G.pin(6),
         sys_api::OutputType::PushPull,
         sys_api::Speed::Medium,
         sys_api::Pull::None,
         sys_api::Alternate::AF10,
-    )
-    .unwrap();
+    );
 
     let qspi_reset = sys_api::Port::F.pin(5);
-    sys.gpio_reset(qspi_reset).unwrap();
+    sys.gpio_reset(qspi_reset);
     sys.gpio_configure_output(
         qspi_reset,
         sys_api::OutputType::PushPull,
         sys_api::Speed::Low,
         sys_api::Pull::None,
-    )
-    .unwrap();
+    );
 
     // TODO: The best clock frequency to use can vary based on the flash
     // part, the command used, and signal integrity limits of the board.
@@ -117,7 +117,7 @@ fn main() -> ! {
     hl::sleep_for(1);
 
     // Release reset and let it stabilize.
-    sys.gpio_set(qspi_reset).unwrap();
+    sys.gpio_set(qspi_reset);
     hl::sleep_for(10);
 
     // TODO: check the ID and make sure it's what we expect
@@ -433,16 +433,6 @@ impl idl::InOrderAuxFlashImpl for ServerImpl {
             .get_blob_by_tag(active_slot, tag)
             .map_err(RequestError::from)
     }
-
-    fn get_blob_by_u32(
-        &mut self,
-        msg: &RecvMessage,
-        tag: u32,
-    ) -> Result<AuxFlashBlob, RequestError<AuxFlashError>> {
-        // This is so that we can call this function from `humility hiffy`,
-        // which doesn't know how to send arrays as arguments.
-        self.get_blob_by_tag(msg, tag.to_be_bytes())
-    }
 }
 
 fn scan_for_active_slot(qspi: &Qspi) -> Option<u32> {
@@ -478,5 +468,7 @@ mod idl {
 
     include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/checksum.rs"));

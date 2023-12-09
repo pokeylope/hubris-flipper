@@ -11,15 +11,17 @@ use drv_i2c_api::ResponseCode;
 use userlib::*;
 use zerocopy::AsBytes;
 
+pub use task_sensor_api::SensorId;
+
 #[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq, IdolError)]
 pub enum ValidateError {
     InvalidDevice = 1,
-    BadValidation = 2,
-    NotPresent = 3,
-    DeviceError = 4,
-    Unavailable = 5,
-    DeviceTimeout = 6,
-    DeviceOff = 7,
+    BadValidation,
+    NotPresent,
+    DeviceError,
+    Unavailable,
+    DeviceTimeout,
+    DeviceOff,
 }
 
 impl From<ResponseCode> for ValidateError {
@@ -29,7 +31,7 @@ impl From<ResponseCode> for ValidateError {
             ResponseCode::NoRegister => ValidateError::Unavailable,
             ResponseCode::BusLocked
             | ResponseCode::BusLockedMux
-            | ResponseCode::ControllerLocked => ValidateError::DeviceTimeout,
+            | ResponseCode::ControllerBusy => ValidateError::DeviceTimeout,
             _ => ValidateError::DeviceError,
         }
     }
@@ -44,3 +46,30 @@ pub enum ValidateOk {
 }
 
 include!(concat!(env!("OUT_DIR"), "/client_stub.rs"));
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Sensor {
+    Temperature,
+    Power,
+    Current,
+    Voltage,
+    InputCurrent,
+    InputVoltage,
+    Speed,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SensorDescription {
+    pub name: Option<&'static str>,
+    pub kind: Sensor,
+    pub id: SensorId,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct DeviceDescription {
+    pub device: &'static str,
+    pub description: &'static str,
+    pub sensors: &'static [SensorDescription],
+}
+
+include!(concat!(env!("OUT_DIR"), "/device_descriptions.rs"));

@@ -125,12 +125,6 @@ impl Peripheral {
     }
 }
 
-#[derive(Copy, Clone, Debug, FromPrimitive, IdolError)]
-#[repr(u32)]
-pub enum GpioError {
-    BadArg = 2,
-}
-
 impl Sys {
     /// Configures a subset of pins in a GPIO port.
     ///
@@ -146,23 +140,25 @@ impl Sys {
         speed: Speed,
         pull: Pull,
         af: Alternate,
-    ) -> Result<(), GpioError> {
+    ) {
         let packed_attributes = mode as u16
             | (output_type as u16) << 2
             | (speed as u16) << 3
             | (pull as u16) << 5
             | (af as u16) << 7;
 
-        self.gpio_configure_raw(port, pins, packed_attributes)
+        self.gpio_configure_raw(port, pins, packed_attributes);
     }
 
     /// Configures the pins in `PinSet` as high-impedance digital inputs, with
     /// optional pull resistors.
-    pub fn gpio_configure_input(
-        &self,
-        pinset: PinSet,
-        pull: Pull,
-    ) -> Result<(), GpioError> {
+    ///
+    /// This chooses arbitrary settings for all the other fields (output type,
+    /// slew rate, alternate function), and so it is not suitable for
+    /// pins that need to be repeatedly reconfigured between high-impedance and
+    /// alternate without intermediate glitching. In such cases you probably
+    /// want to use the raw `gpio_configure`.
+    pub fn gpio_configure_input(&self, pinset: PinSet, pull: Pull) {
         self.gpio_configure(
             pinset.port,
             pinset.pin_mask,
@@ -171,7 +167,7 @@ impl Sys {
             Speed::High,          // doesn't matter
             pull,
             Alternate::AF0, // doesn't matter
-        )
+        );
     }
 
     /// Configures the pins in `PinSet` as digital GPIO outputs, either
@@ -183,7 +179,7 @@ impl Sys {
         output_type: OutputType,
         speed: Speed,
         pull: Pull,
-    ) -> Result<(), GpioError> {
+    ) {
         self.gpio_configure(
             pinset.port,
             pinset.pin_mask,
@@ -192,7 +188,7 @@ impl Sys {
             speed,
             pull,
             Alternate::AF0, // doesn't matter
-        )
+        );
     }
 
     /// Configures the pins in `PinSet` in the given alternate function.
@@ -207,7 +203,7 @@ impl Sys {
         speed: Speed,
         pull: Pull,
         af: Alternate,
-    ) -> Result<(), GpioError> {
+    ) {
         self.gpio_configure(
             pinset.port,
             pinset.pin_mask,
@@ -216,7 +212,7 @@ impl Sys {
             speed,
             pull,
             af,
-        )
+        );
     }
 
     /// Configures the pins in `PinSet` in the given alternate function, which
@@ -230,42 +226,38 @@ impl Sys {
         pinset: PinSet,
         pull: Pull,
         af: Alternate,
-    ) -> Result<(), GpioError> {
+    ) {
         self.gpio_configure_alternate(
             pinset,
             OutputType::OpenDrain,
             Speed::High,
             pull,
             af,
-        )
+        );
     }
 
     /// Sets some pins high.
-    pub fn gpio_set(&self, pinset: PinSet) -> Result<(), GpioError> {
-        self.gpio_set_reset(pinset.port, pinset.pin_mask, 0)
+    pub fn gpio_set(&self, pinset: PinSet) {
+        self.gpio_set_reset(pinset.port, pinset.pin_mask, 0);
     }
 
     /// Resets some pins low.
-    pub fn gpio_reset(&self, pinset: PinSet) -> Result<(), GpioError> {
-        self.gpio_set_reset(pinset.port, 0, pinset.pin_mask)
+    pub fn gpio_reset(&self, pinset: PinSet) {
+        self.gpio_set_reset(pinset.port, 0, pinset.pin_mask);
     }
 
     /// Sets some pins based on `flag` -- high if `true`, low if `false`.
     #[inline]
-    pub fn gpio_set_to(
-        &self,
-        pinset: PinSet,
-        flag: bool,
-    ) -> Result<(), GpioError> {
+    pub fn gpio_set_to(&self, pinset: PinSet, flag: bool) {
         self.gpio_set_reset(
             pinset.port,
             if flag { pinset.pin_mask } else { 0 },
             if flag { 0 } else { pinset.pin_mask },
-        )
+        );
     }
 
-    pub fn gpio_read(&self, pinset: PinSet) -> Result<u16, GpioError> {
-        Ok(self.gpio_read_input(pinset.port)? & pinset.pin_mask)
+    pub fn gpio_read(&self, pinset: PinSet) -> u16 {
+        self.gpio_read_input(pinset.port) & pinset.pin_mask
     }
 
     /// Combines a common sequence of operations to initialize a reset line
@@ -281,18 +273,17 @@ impl Sys {
         pinset: PinSet,
         low_time_ms: u32,
         wait_time_ms: u32,
-    ) -> Result<(), GpioError> {
-        self.gpio_reset(pinset)?;
+    ) {
+        self.gpio_reset(pinset);
         self.gpio_configure_output(
             pinset,
             OutputType::PushPull,
             Speed::Low,
             Pull::None,
-        )?;
+        );
         userlib::hl::sleep_for(low_time_ms as u64);
-        self.gpio_set(pinset)?;
+        self.gpio_set(pinset);
         userlib::hl::sleep_for(wait_time_ms as u64);
-        Ok(())
     }
 }
 

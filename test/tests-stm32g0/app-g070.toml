@@ -6,34 +6,22 @@ memory = "memory-g070.toml"
 
 [kernel]
 name = "demo-stm32g0-nucleo"
-requires = {flash = 17148, ram = 2808}
-#
-# For the kernel (and for any task that logs), we are required to enable
-# either "itm" (denoting logging/panicking via ARM's Instrumentation Trace
-# Macrocell) or "semihosting" (denoting logging/panicking via ARM
-# semihosting).  We are biased to ITM because semihosting is excruciatingly
-# slow (it is breakpoint based) and has an undesirable failure mode if logging
-# output is generated and debugger is not attached (namely, the target stops).
-# If one does choose to change this to semihosting for purposes of
-# development, be sure to also change it in every task of interest.
-#
-features = ["g070", "panic-semihosting"]
+requires = {flash = 17544, ram = 2828}
+features = ["g070"]
 stacksize = 2048
 
 [tasks.runner]
 name = "test-runner"
 priority = 0
-max-sizes = {flash = 16384, ram = 2048}
+max-sizes = {flash = 16384, ram = 4096}
 start = true
-features = ["semihosting"]
 stacksize = 1904
 
 [tasks.suite]
 name = "test-suite"
 priority = 2
-max-sizes = {flash = 65536, ram = 2048}
+max-sizes = {flash = 65536, ram = 4096}
 start = true
-features = ["semihosting"]
 task-slots = ["assist", "idol", "suite", "runner"]
 stacksize = 1504
 
@@ -49,7 +37,6 @@ name = "test-assist"
 priority = 1
 max-sizes = {flash = 16384, ram = 2048}
 start = true
-features = ["semihosting"]
 stacksize = 1504
 
 [tasks.idol]
@@ -59,9 +46,18 @@ max-sizes = {flash = 4096, ram = 1024}
 stacksize = 1024
 start = true
 
+[tasks.hiffy]
+name = "task-hiffy"
+priority = 3
+features = ["testsuite"]
+max-sizes = {flash = 32768, ram = 32768 }
+stacksize = 2048
+start = true
+task-slots = ["suite", "runner"]
+
 [tasks.idle]
 name = "task-idle"
-priority = 3
+priority = 4
 max-sizes = {flash = 128, ram = 64}
 stacksize = 64
 start = true

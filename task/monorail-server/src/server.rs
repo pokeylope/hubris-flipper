@@ -2,16 +2,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::bsp::{self, Bsp};
-use idol_runtime::{NotificationHandler, RequestError};
-use monorail_api::{
+use crate::{
+    bsp::{self, Bsp},
+    notifications,
+};
+use drv_monorail_api::{
     LinkStatus, MacTableEntry, MonorailError, PacketCount, PhyStatus, PhyType,
     PortCounters, PortDev, PortStatus, VscError,
 };
+use idol_runtime::{NotificationHandler, RequestError};
 use userlib::{sys_get_timer, sys_set_timer};
 use vsc7448::{
     config::{PortMap, PortMode},
-    DevGeneric, Vsc7448, Vsc7448Rw,
+    DevGeneric, Vsc7448, Vsc7448Rw, PORT_COUNT,
 };
 use vsc7448_pac::{types::PhyRegisterAddress, *};
 
@@ -20,10 +23,15 @@ pub struct ServerImpl<'a, R> {
     vsc7448: &'a Vsc7448<'a, R>,
     map: &'a PortMap,
     wake_target_time: u64,
+
+    /// For monitoring purposes, we want a sticky bit that indicates whether a
+    /// link has gone down from the perspective of an attached PHY.
+    ///
+    /// However, the PHY registers typically use self-clearing bits.  We cache
+    /// the bit here, so that it can be explicitly cleared.
+    phy_link_down_sticky: [bool; PORT_COUNT],
 }
 
-/// Notification mask for optional periodic logging
-pub const WAKE_IRQ: u32 = 1;
 pub const INCOMING_SIZE: usize = idl::INCOMING_SIZE;
 
 impl<'a, R: Vsc7448Rw> ServerImpl<'a, R> {
@@ -36,12 +44,15 @@ impl<'a, R: Vsc7448Rw> ServerImpl<'a, R> {
         // logging.  We schedule a wake-up before entering the idol_runtime dispatch
         // loop, to make sure that this gets called periodically.
         let wake_target_time = sys_get_timer().now;
-        sys_set_timer(Some(0), WAKE_IRQ); // Trigger a wake IRQ right away
+
+        // Trigger a wake IRQ right away
+        sys_set_timer(Some(0), notifications::WAKE_TIMER_MASK);
         Self {
             bsp,
             wake_target_time,
             map,
             vsc7448,
+            phy_link_down_sticky: [false; PORT_COUNT],
         }
     }
 
@@ -51,7 +62,10 @@ impl<'a, R: Vsc7448Rw> ServerImpl<'a, R> {
             if now >= self.wake_target_time {
                 let out = self.bsp.wake();
                 self.wake_target_time = now + wake_interval;
-                sys_set_timer(Some(self.wake_target_time), WAKE_IRQ);
+                sys_set_timer(
+                    Some(self.wake_target_time),
+                    notifications::WAKE_TIMER_MASK,
+                );
                 return out;
             }
         }
@@ -170,7 +184,7 @@ impl<'a, R: Vsc7448Rw> idl::InOrderMonorailImpl for ServerImpl<'a, R> {
             None => return Err(MonorailError::UnconfiguredPort.into()),
             Some(cfg) => cfg,
         };
-        let (tx, rx) = match cfg.dev.0 {
+        let (tx, rx, link_down_sticky, phy_link_down_sticky) = match cfg.dev.0 {
             PortDev::Dev1g | PortDev::Dev2g5 => {
                 let stats = ASM().DEV_STATISTICS(port);
                 let rx_uc = self
@@ -197,6 +211,21 @@ impl<'a, R: Vsc7448Rw> idl::InOrderMonorailImpl for ServerImpl<'a, R> {
                     .vsc7448
                     .read(stats.TX_MC_CNT())
                     .map_err(MonorailError::from)?;
+
+                // TODO: if this port uses a PHY, then should we be checking
+                // the PHY's status instead of ours?
+                let dev = match cfg.dev.0 {
+                    PortDev::Dev1g => DevGeneric::new_1g(cfg.dev.1),
+                    PortDev::Dev2g5 => DevGeneric::new_2g5(cfg.dev.1),
+                    _ => unreachable!(),
+                }
+                .map_err(MonorailError::from)?;
+
+                let link_down = self
+                    .vsc7448
+                    .read(dev.regs().PCS1G_CFG_STATUS().PCS1G_STICKY())
+                    .map_err(MonorailError::from)?;
+
                 let tx = PacketCount {
                     unicast: tx_uc.into(),
                     multicast: tx_mc.into(),
@@ -207,7 +236,30 @@ impl<'a, R: Vsc7448Rw> idl::InOrderMonorailImpl for ServerImpl<'a, R> {
                     multicast: rx_mc.into(),
                     broadcast: rx_bc.into(),
                 };
-                (tx, rx)
+                let link_down_sticky = link_down.link_down_sticky() != 0
+                    || link_down.out_of_sync_sticky() != 0;
+
+                // Take the union of the "link changed" bit on the PHY and our
+                // local sticky value (since the PHY bit is self-resetting)
+                let v = match self.bsp.phy_fn(port, |phy| {
+                    phy.read(phy::STANDARD::INTERRUPT_STATUS())
+                }) {
+                    // If there is no PHY present, then the PHY link down
+                    // indication is always false.
+                    None => false,
+                    // Otherwise, bit 13 is "Link state change mask"
+                    Some(r) => r
+                        .map(|r| r.0 & (1 << 13) != 0)
+                        .map_err(MonorailError::from)?,
+                };
+                self.phy_link_down_sticky[port as usize] |= v;
+
+                (
+                    tx,
+                    rx,
+                    link_down_sticky,
+                    self.phy_link_down_sticky[port as usize],
+                )
             }
             PortDev::Dev10g => {
                 let stats = DEV10G(cfg.dev.1).DEV_STATISTICS_32BIT();
@@ -245,10 +297,24 @@ impl<'a, R: Vsc7448Rw> idl::InOrderMonorailImpl for ServerImpl<'a, R> {
                     multicast: rx_mc.into(),
                     broadcast: rx_bc.into(),
                 };
-                (tx, rx)
+
+                let intr = self
+                    .vsc7448
+                    .read(
+                        PCS10G_BR(cfg.dev.1).PCS_10GBR_STATUS().PCS_INTR_STAT(),
+                    )
+                    .map_err(MonorailError::from)?;
+                let link_down_sticky = intr.lock_changed_sticky() != 0;
+
+                (tx, rx, link_down_sticky, false)
             }
         };
-        Ok(PortCounters { tx, rx })
+        Ok(PortCounters {
+            tx,
+            rx,
+            link_down_sticky,
+            phy_link_down_sticky,
+        })
     }
 
     fn reset_port_counters(
@@ -284,6 +350,36 @@ impl<'a, R: Vsc7448Rw> idl::InOrderMonorailImpl for ServerImpl<'a, R> {
                 self.vsc7448
                     .write(stats.TX_MC_CNT(), 0.into())
                     .map_err(MonorailError::from)?;
+
+                let dev = match cfg.dev.0 {
+                    PortDev::Dev1g => DevGeneric::new_1g(cfg.dev.1),
+                    PortDev::Dev2g5 => DevGeneric::new_2g5(cfg.dev.1),
+                    _ => unreachable!(),
+                }
+                .map_err(MonorailError::from)?;
+
+                // Clear our local sticky bit, then read the PHY register (to
+                // clear the self-clearing bit).  We don't care about the actual
+                // register value here; just the side effect of reading it.
+                self.phy_link_down_sticky[port as usize] = false;
+                if let Some(Err(e)) = self.bsp.phy_fn(port, |phy| {
+                    phy.read(phy::STANDARD::INTERRUPT_STATUS())
+                }) {
+                    return Err(e)
+                        .map_err(MonorailError::from)
+                        .map_err(RequestError::from);
+                }
+
+                // Clear the two bits that we use to detect link drops
+                self.vsc7448
+                    .write_with(
+                        dev.regs().PCS1G_CFG_STATUS().PCS1G_STICKY(),
+                        |r| {
+                            r.set_link_down_sticky(1);
+                            r.set_out_of_sync_sticky(1);
+                        },
+                    )
+                    .map_err(MonorailError::from)?;
             }
             PortDev::Dev10g => {
                 let stats = DEV10G(cfg.dev.1).DEV_STATISTICS_32BIT();
@@ -304,6 +400,13 @@ impl<'a, R: Vsc7448Rw> idl::InOrderMonorailImpl for ServerImpl<'a, R> {
                     .map_err(MonorailError::from)?;
                 self.vsc7448
                     .write(stats.TX_MC_CNT(), 0.into())
+                    .map_err(MonorailError::from)?;
+
+                self.vsc7448
+                    .write_with(
+                        PCS10G_BR(cfg.dev.1).PCS_10GBR_STATUS().PCS_INTR_STAT(),
+                        |r| r.set_lock_changed_sticky(1),
+                    )
                     .map_err(MonorailError::from)?;
             }
         }
@@ -677,12 +780,22 @@ impl<'a, R: Vsc7448Rw> idl::InOrderMonorailImpl for ServerImpl<'a, R> {
         };
         Ok(out)
     }
+
+    fn reinit(
+        &mut self,
+        _msg: &userlib::RecvMessage,
+    ) -> Result<(), RequestError<MonorailError>> {
+        self.bsp
+            .reinit()
+            .map_err(MonorailError::from)
+            .map_err(RequestError::from)
+    }
 }
 
 impl<'a, R> NotificationHandler for ServerImpl<'a, R> {
     fn current_notification_mask(&self) -> u32 {
         // We're always listening for the wake (timer) irq
-        WAKE_IRQ
+        notifications::WAKE_TIMER_MASK
     }
 
     fn handle_notification(&mut self, _bits: u32) {
@@ -691,10 +804,5 @@ impl<'a, R> NotificationHandler for ServerImpl<'a, R> {
 }
 
 mod idl {
-    use super::{
-        MacTableEntry, MonorailError, PhyStatus, PortCounters, PortStatus,
-    };
-    use vsc85xx::tesla::{TeslaSerdes6gObConfig, TeslaSerdes6gPatch};
-    use vsc85xx::vsc8562::{Sd6gObCfg, Sd6gObCfg1};
     include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
 }

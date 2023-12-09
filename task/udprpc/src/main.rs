@@ -22,9 +22,6 @@ enum RpcReply {
     /// The size of the packet does not agree with the number of bytes specified
     /// in the `nbytes` field of the packet
     NBytesMismatch,
-    /// The result of the function does not agree with the number of bytes
-    /// specified in the `nreply` field of the packet
-    NReplyMismatch,
     /// The output would overflow `tx_data_buf`
     NReplyOverflow,
 }
@@ -56,8 +53,8 @@ fn main() -> ! {
 
     // The output format is dependent on status code.  The first byte is always
     // a member of `RpcReply` as a `u8`.
-    // - `NBytesMismatch`, `NReplyMismatch`, `NReplyOverflow` return nothing
-    //   else (so the reply is 1 byte)
+    // - `NBytesMismatch`, `NReplyOverflow` return nothing else (so the reply is
+    //   1 byte)
     // - `BadImageId` is followed by the *actual* 64-bit image id as a
     //   little-endian value
     // - `Ok` is followed by the return code as a 32-bit, little-endian value,
@@ -83,10 +80,10 @@ fn main() -> ! {
                     // We can always read the header, since it's raw data
                     let header =
                         RpcHeader::read_from(&rx_data_buf[..HEADER_SIZE])
-                            .unwrap();
+                            .unwrap_lite();
 
                     let nbytes = header.nbytes.get() as usize;
-                    let nreply = header.nreply.get() as usize;
+                    let mut nreply = header.nreply.get() as usize;
 
                     let r = if image_id != header.image_id.get() {
                         tx_data_buf[1..9].copy_from_slice(image_id.as_bytes());
@@ -105,21 +102,29 @@ fn main() -> ! {
                         // u32 return code from the `sys_send` call.
                         let tx_data =
                             &mut tx_data_buf[REPLY_PREFIX_SIZE..][..nreply];
+
+                        let task_id =
+                            sys_refresh_task_id(TaskId(header.task.get()));
                         let (rc, len) = sys_send(
-                            TaskId(header.task.get()),
+                            task_id,
                             header.op.get(),
                             rx_data,
                             tx_data,
                             &[],
                         );
-                        if rc == 0 && len != nreply {
-                            RpcReply::NReplyMismatch
-                        } else {
-                            // Store the return code
-                            tx_data_buf[1..5]
-                                .copy_from_slice(&rc.to_be_bytes());
-                            RpcReply::Ok
-                        }
+
+                        // Store the return code
+                        tx_data_buf[1..5].copy_from_slice(&rc.to_be_bytes());
+
+                        // For idol calls with ssmarshal or hubpack encoding,
+                        // the actual reply len may be less than `nreply` (the
+                        // max possible encoding length); fill in the
+                        // possibly-truncated length here. We know `len` is at
+                        // most `nreply`: if it weren't, `sys_send()` would have
+                        // faulted us for providing a too-short buffer.
+                        nreply = len;
+
+                        RpcReply::Ok
                     };
                     (r, nreply)
                 };
@@ -129,27 +134,68 @@ fn main() -> ! {
                 meta.size = match r {
                     RpcReply::TooShort
                     | RpcReply::NBytesMismatch
-                    | RpcReply::NReplyOverflow
-                    | RpcReply::NReplyMismatch => 1,
+                    | RpcReply::NReplyOverflow => 1,
                     RpcReply::BadImageId => {
                         (1 + core::mem::size_of_val(&image_id)) as u32
                     }
                     RpcReply::Ok => (nreply + REPLY_PREFIX_SIZE) as u32,
                 };
 
-                net.send_packet(
-                    SOCKET,
-                    meta,
-                    &tx_data_buf[0..(meta.size as usize)],
-                )
-                .unwrap();
+                loop {
+                    match net.send_packet(
+                        SOCKET,
+                        meta,
+                        &tx_data_buf[0..(meta.size as usize)],
+                    ) {
+                        Ok(()) => break,
+                        // If `net` just restarted, immediately retry our send.
+                        Err(SendError::ServerRestarted) => continue,
+                        // If our tx queue is full, wait for space. This is the
+                        // same notification we get for incoming packets, so we
+                        // might spuriously wake up due to an incoming packet
+                        // (which we can't service anyway because we are still
+                        // waiting to respond to a previous request); once we
+                        // finally succeed in sending we'll peel any queued
+                        // packets off our recv queue at the top of our main
+                        // loop.
+                        Err(SendError::QueueFull) => {
+                            sys_recv_closed(
+                                &mut [],
+                                notifications::SOCKET_MASK,
+                                TaskId::KERNEL,
+                            )
+                            .unwrap_lite();
+                        }
+                        // These errors should be impossible if we're configured
+                        // correctly.
+                        Err(SendError::NotYours | SendError::InvalidVLan) => {
+                            unreachable!()
+                        }
+                        // Unclear under what conditions we could se `Other` -
+                        // just panic for now? At the time of this writing
+                        // `Other` should only come back if the destination
+                        // address in `meta` is bogus or our socket is closed,
+                        // neither of which should be possible here.
+                        Err(SendError::Other) => panic!(),
+                    }
+                }
             }
             Err(RecvError::QueueEmpty) => {
                 // Our incoming queue is empty. Wait for more packets.
-                sys_recv_closed(&mut [], 1, TaskId::KERNEL).unwrap();
+                sys_recv_closed(
+                    &mut [],
+                    notifications::SOCKET_MASK,
+                    TaskId::KERNEL,
+                )
+                .unwrap_lite();
+            }
+            Err(RecvError::ServerRestarted) => {
+                // `net` restarted (probably due to the watchdog); just retry.
             }
             Err(RecvError::NotYours | RecvError::Other) => panic!(),
         }
         // Try again.
     }
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

@@ -57,33 +57,46 @@ pub fn run(
                 .map(|name| (name.as_str(), fake_sizes.clone()))
                 .collect();
 
-            let allocated = crate::dist::allocate_all(&toml, &task_sizes)?;
+            let allocated = crate::dist::allocate_all(
+                &toml,
+                &task_sizes,
+                toml.caboose.as_ref(),
+            )?;
 
             let (allocs, _) = allocated
                 .get(&toml.image_names[0])
                 .ok_or_else(|| anyhow::anyhow!("Failed to get image name"))?;
 
             // Pick dummy entry points for each task
-            let entry_points = allocs
+            let mut entry_points: std::collections::HashMap<_, _> = allocs
                 .tasks
                 .iter()
                 .map(|(k, v)| (k.clone(), v["flash"].start))
                 .collect();
+
+            // add a dummy caboose point
+            entry_points.insert("caboose".to_string(), 0x0);
 
             let kconfig = crate::dist::make_kconfig(
                 &toml,
                 &allocs.tasks,
                 &entry_points,
                 &toml.image_names[0],
-                &None,
             )?;
             let kconfig = ron::ser::to_string(&kconfig)?;
+
+            let flash_outputs = if let Some(o) = toml.outputs.get("flash") {
+                ron::ser::to_string(o)?
+            } else {
+                bail!("no 'flash' output regions defined in config toml");
+            };
 
             toml.kernel_build_config(
                 verbose,
                 &[
                     ("HUBRIS_KCONFIG", &kconfig),
                     ("HUBRIS_IMAGE_ID", "1234"), // dummy image ID
+                    ("HUBRIS_FLASH_OUTPUTS", &flash_outputs),
                 ],
                 None,
             )

@@ -7,9 +7,12 @@
 #![no_std]
 
 use derive_idol_err::IdolError;
+use hubpack::SerializedSize;
 use serde::{Deserialize, Serialize};
 use userlib::*;
 use zerocopy::{AsBytes, FromBytes};
+
+pub use task_packrat_api::MacAddressBlock;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, IdolError)]
 #[repr(u32)]
@@ -24,6 +27,9 @@ pub enum SendError {
     QueueFull = 3,
 
     Other = 4,
+
+    #[idol(server_death)]
+    ServerRestarted = 5,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, IdolError)]
@@ -36,6 +42,9 @@ pub enum RecvError {
     QueueEmpty = 2,
 
     Other = 3,
+
+    #[idol(server_death)]
+    ServerRestarted = 4,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, IdolError)]
@@ -48,13 +57,16 @@ pub enum PhyError {
     NotImplemented = 2,
 
     Other = 3,
+
+    #[idol(server_death)]
+    ServerRestarted = 4,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, IdolError)]
 #[repr(u32)]
 pub enum KszError {
     /// This functionality is not available on the given board
-    NotAvailable,
+    NotAvailable = 1,
     /// The MAC table index is too large
     BadMacIndex,
     /// The given address is not a valid register
@@ -62,29 +74,8 @@ pub enum KszError {
 
     WrongChipId,
 
-    // Errors copied from SpiError
-    BadTransferSize,
+    #[idol(server_death)]
     ServerRestarted,
-    NothingToRelease,
-    BadDevice,
-    DataOverrun,
-}
-
-#[cfg(feature = "ksz8463")]
-impl From<ksz8463::Error> for KszError {
-    fn from(e: ksz8463::Error) -> Self {
-        use drv_spi_api::SpiError;
-        match e {
-            ksz8463::Error::SpiError(e) => match e {
-                SpiError::BadTransferSize => KszError::BadTransferSize,
-                SpiError::ServerRestarted => KszError::ServerRestarted,
-                SpiError::NothingToRelease => KszError::NothingToRelease,
-                SpiError::BadDevice => KszError::BadDevice,
-                SpiError::DataOverrun => KszError::DataOverrun,
-            },
-            ksz8463::Error::WrongChipId(..) => KszError::WrongChipId,
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, AsBytes, FromBytes)]
@@ -112,7 +103,9 @@ impl From<ksz8463::KszRawMacTableEntry> for KszMacTableEntry {
 #[repr(C)]
 pub struct MacAddress(pub [u8; 6]);
 
-#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, Default, Serialize, SerializedSize, Deserialize,
+)]
 #[repr(C)]
 pub struct ManagementLinkStatus {
     pub ksz8463_100base_fx_link_up: [bool; 2],
@@ -120,7 +113,9 @@ pub struct ManagementLinkStatus {
     pub vsc85x2_sgmii_link_up: [bool; 2],
 }
 
-#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, Default, Serialize, SerializedSize, Deserialize,
+)]
 #[repr(C)]
 pub struct ManagementCountersVsc85x2 {
     pub mac_good: u16,
@@ -129,7 +124,9 @@ pub struct ManagementCountersVsc85x2 {
     pub media_bad: u16,
 }
 
-#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, Default, Serialize, SerializedSize, Deserialize,
+)]
 #[repr(C)]
 pub struct ManagementCountersKsz8463 {
     pub multicast: u32,
@@ -137,7 +134,9 @@ pub struct ManagementCountersKsz8463 {
     pub broadcast: u32,
 }
 
-#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, Default, Serialize, SerializedSize, Deserialize,
+)]
 #[repr(C)]
 pub struct ManagementCounters {
     pub vsc85x2_tx: [ManagementCountersVsc85x2; 2],
@@ -153,14 +152,19 @@ pub struct ManagementCounters {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, IdolError)]
 #[repr(u32)]
 pub enum MgmtError {
-    NotAvailable,
+    NotAvailable = 1,
     VscError,
     KszError,
+
+    #[idol(server_death)]
+    ServerRestarted,
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Copy, Clone, Debug, Serialize, SerializedSize, Deserialize, PartialEq, Eq,
+)]
 #[repr(u32)]
 pub enum LargePayloadBehavior {
     /// If we have a packet with a payload larger than the buffer provided to
@@ -175,7 +179,9 @@ pub enum LargePayloadBehavior {
     // so we omit it for now.
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Copy, Clone, Debug, Serialize, SerializedSize, Deserialize, PartialEq, Eq,
+)]
 pub struct UdpMetadata {
     pub addr: Address,
     pub port: u16,
@@ -197,7 +203,9 @@ impl From<UdpMetadata> for smoltcp::wire::IpEndpoint {
 
 // This must be repr(C); otherwise Rust cleverly optimizes out the enum tag,
 // which breaks ssmarshal's assumptions about struct sizes.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Copy, Clone, Debug, Serialize, SerializedSize, Deserialize, PartialEq, Eq,
+)]
 #[repr(C)]
 pub enum Address {
     Ipv6(Ipv6Address),
@@ -221,7 +229,6 @@ impl TryFrom<smoltcp::wire::IpAddress> for Address {
 
         match a {
             IpAddress::Ipv6(a) => Ok(Self::Ipv6(a.into())),
-            _ => Err(AddressUnspecified),
         }
     }
 }
@@ -229,7 +236,9 @@ impl TryFrom<smoltcp::wire::IpAddress> for Address {
 #[cfg(feature = "use-smoltcp")]
 pub struct AddressUnspecified;
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Copy, Clone, Debug, Serialize, SerializedSize, Deserialize, PartialEq, Eq,
+)]
 #[serde(transparent)]
 pub struct Ipv6Address(pub [u8; 16]);
 

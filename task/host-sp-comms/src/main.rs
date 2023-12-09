@@ -5,27 +5,60 @@
 #![no_std]
 #![no_main]
 
-use core::ops::Range;
-
 #[cfg(any(feature = "stm32h743", feature = "stm32h753"))]
 use drv_stm32h7_usart as drv_usart;
 
+use drv_gimlet_hf_api::{HfDevSelect, HostFlash};
 use drv_gimlet_seq_api::{PowerState, SeqError, Sequencer};
+use drv_stm32xx_sys_api as sys_api;
 use drv_usart::Usart;
+use enum_map::Enum;
 use heapless::Vec;
 use host_sp_messages::{
-    Bsu, DecodeFailureReason, Header, HostToSp, HubpackError, SpToHost, Status,
-    MAX_MESSAGE_SIZE,
+    Bsu, DecodeFailureReason, Header, HostToSp, Key, KeyLookupResult,
+    KeySetResult, SpToHost, Status, MAX_MESSAGE_SIZE,
+    MIN_SP_TO_HOST_FILL_DATA_LEN,
 };
+use hubpack::SerializedSize;
+use idol_runtime::{NotificationHandler, RequestError};
+use multitimer::{Multitimer, Repeat};
 use mutable_statics::mutable_statics;
 use ringbuf::{ringbuf, ringbuf_entry};
+use static_assertions::const_assert;
+use task_control_plane_agent_api::{
+    ControlPlaneAgent, MAX_INSTALLINATOR_IMAGE_ID_LEN,
+};
+use task_host_sp_comms_api::HostSpCommsError;
+use task_net_api::Net;
+use task_packrat_api::Packrat;
 use userlib::{
-    hl, sys_get_timer, sys_irq_control, sys_recv_closed, sys_set_timer,
-    task_slot, TaskId, UnwrapLite,
+    hl, sys_get_timer, sys_irq_control, task_slot, FromPrimitive, UnwrapLite,
 };
 
-task_slot!(SYS, sys);
+mod inventory;
+use inventory::INVENTORY_API_VERSION;
+
+#[cfg_attr(
+    any(
+        target_board = "gimlet-b",
+        target_board = "gimlet-c",
+        target_board = "gimlet-d",
+        target_board = "gimlet-e",
+    ),
+    path = "bsp/gimlet_bcde.rs"
+)]
+#[cfg_attr(target_board = "gimletlet-2", path = "bsp/gimletlet.rs")]
+mod bsp;
+
+mod tx_buf;
+use tx_buf::TxBuf;
+
+task_slot!(CONTROL_PLANE_AGENT, control_plane_agent);
 task_slot!(GIMLET_SEQ, gimlet_seq);
+task_slot!(HOST_FLASH, hf);
+task_slot!(PACKRAT, packrat);
+task_slot!(NET, net);
+task_slot!(SYS, sys);
 
 // TODO: When rebooting the host, we need to wait for the relevant power rails
 // to decay. We ought to do this properly by monitoring the rails, but for now,
@@ -33,29 +66,65 @@ task_slot!(GIMLET_SEQ, gimlet_seq);
 // fix this!
 const A2_REBOOT_DELAY: u64 = 5_000;
 
+// How frequently should we try to send 0x00 bytes to the host? This only
+// applies if our current tx_buf/rx_buf are empty (i.e., we don't have a real
+// response to send, and we haven't yet started to receive a request).
+const UART_ZERO_DELAY: u64 = 200;
+
+// How long of a host panic / boot fail message are we willing to keep?
+const MAX_HOST_FAIL_MESSAGE_LEN: usize = 4096;
+
+// How many MAC addresses should we report to the host? Per RFD 320, a gimlet
+// currently needs 5 total:
+//
+// * 2 for the T6
+// * 2 for the management network (already claimed by `net`)
+// * 1 for the bootstrap network prefix
+//
+// Subtracting out the 2 already claimed by `net`, we will only give the host 3
+// MAC addresses, even if `net` tells us more are available. In the future, if
+// we need to increase the number given to the host, that's easy to do here; if
+// we need to increase the number used by the SP, ideally `net` will take care
+// of that for us.
+const NUM_HOST_MAC_ADDRESSES: u16 = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Trace {
     None,
-    UartTx(u8),
-    UartTxFull,
-    UartRx(u8),
     UartRxOverrun,
-    ClearStatus { mask: u64 },
-    SetState { now: u64, state: PowerState },
-    JefeNotification { now: u64, state: PowerState },
+    ParseError(DecodeFailureReason),
+    SetState {
+        now: u64,
+        state: PowerState,
+    },
+    JefeNotification {
+        now: u64,
+        state: PowerState,
+    },
+    OutOfSyncRequest,
+    OutOfSyncRxNoise,
+    Request {
+        now: u64,
+        sequence: u64,
+        message: HostToSp,
+    },
+    ResponseBufferReset {
+        now: u64,
+    },
+    Response {
+        now: u64,
+        sequence: u64,
+        message: SpToHost,
+    },
 }
 
-ringbuf!(Trace, 64, Trace::None);
+ringbuf!(Trace, 16, Trace::None);
 
-/// Notification bit for USART IRQ; must match configuration in app.toml.
-const USART_IRQ: u32 = 1 << 0;
-
-/// Notification bit for Jefe notifying us of state changes; must match Jefe's
-/// `on-state-change` config for us in app.toml.
-const JEFE_STATE_CHANGE_IRQ: u32 = 1 << 1;
-
-/// Notification bit for the timer we set for ourselves.
-const TIMER_IRQ: u32 = 1 << 2;
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TimerDisposition {
+    LeaveRunning,
+    Cancel,
+}
 
 /// We set the high bit of the sequence number before replying to host requests.
 const SEQ_REPLY: u64 = 0x8000_0000_0000_0000;
@@ -64,29 +133,27 @@ const SEQ_REPLY: u64 = 0x8000_0000_0000_0000;
 /// max unwrapped message length.
 const MAX_PACKET_SIZE: usize = corncobs::max_encoded_len(MAX_MESSAGE_SIZE);
 
+#[derive(Copy, Clone, Enum)]
+enum Timers {
+    /// Timer set when we're waiting in A2 before moving back to A0 for a
+    /// reboot.
+    WaitingInA2ToReboot,
+    /// Timer set when we want to send periodic 0x00 bytes on the uart.
+    TxPeriodicZeroByte,
+}
+
 #[export_name = "main"]
 fn main() -> ! {
-    let mut server =
-        ServerImpl::claim_static_resources(Status::SP_TASK_RESTARTED);
+    let mut server = ServerImpl::claim_static_resources();
 
-    sys_irq_control(USART_IRQ, true);
+    // Set our restarted status, which interrupts the host to let them know.
+    server.set_status_impl(Status::SP_TASK_RESTARTED);
 
+    sys_irq_control(notifications::USART_IRQ_MASK, true);
+
+    let mut buffer = [0; idl::INCOMING_SIZE];
     loop {
-        let mut mask = USART_IRQ | JEFE_STATE_CHANGE_IRQ;
-        if let Some(RebootState::TransitionToA0At(deadline)) =
-            server.reboot_state
-        {
-            sys_set_timer(Some(deadline), TIMER_IRQ);
-            mask |= TIMER_IRQ;
-        }
-
-        // Wait for uart interrupt; if we haven't enabled tx interrupts, this
-        // blocks until there's data to receive.
-        let note = sys_recv_closed(&mut [], mask, TaskId::KERNEL)
-            .unwrap_lite()
-            .operation;
-
-        server.handle_notification(note);
+        idol_runtime::dispatch_n(&mut buffer, &mut server);
     }
 }
 
@@ -95,37 +162,140 @@ enum RebootState {
     // We've instructed the sequencer to transition to A2; we're waiting to see
     // the notification from jefe that that transition has occurred.
     WaitingForA2,
-    // We're in our reboot delay (see `A2_REBOOT_DELAY`); once we're past this
-    // deadline, we want to transition to A0.
-    TransitionToA0At(u64),
+    // We're in our reboot delay (see `A2_REBOOT_DELAY`). When we transition to
+    // this state we start our `WaitingInA2ToReboot` timer; when it fires we'll
+    // transition to A0.
+    WaitingInA2RebootDelay,
+}
+
+const MAX_ETC_SYSTEM_LEN: usize = 256;
+const MAX_DTRACE_CONF_LEN: usize = 4096;
+
+// Storage we set aside for any messages where the host wants us to remember
+// data for later read back (either by the host itself or by the control plane
+// via MGS).
+struct HostKeyValueStorage {
+    last_boot_fail: &'static mut [u8; MAX_HOST_FAIL_MESSAGE_LEN],
+    last_panic: &'static mut [u8; MAX_HOST_FAIL_MESSAGE_LEN],
+    etc_system: &'static mut [u8; MAX_ETC_SYSTEM_LEN],
+    etc_system_len: usize,
+    dtrace_conf: &'static mut [u8; MAX_DTRACE_CONF_LEN],
+    dtrace_conf_len: usize,
+}
+
+impl HostKeyValueStorage {
+    fn claim_static_resources() -> Self {
+        let (last_boot_fail, last_panic, etc_system, dtrace_conf) = mutable_statics! {
+            static mut LAST_HOST_BOOT_FAIL: [u8; MAX_HOST_FAIL_MESSAGE_LEN] =
+                [|| 0; _];
+            static mut LAST_HOST_PANIC: [u8; MAX_HOST_FAIL_MESSAGE_LEN] =
+                [|| 0; _];
+            static mut HOST_ETC_SYSTEM: [u8; MAX_ETC_SYSTEM_LEN] =
+                [|| 0; _];
+            static mut HOST_DTRACE_CONF: [u8; MAX_DTRACE_CONF_LEN] =
+                [|| 0; _];
+        };
+
+        Self {
+            last_boot_fail,
+            last_panic,
+            etc_system,
+            etc_system_len: 0,
+            dtrace_conf,
+            dtrace_conf_len: 0,
+        }
+    }
+
+    fn key_set(&mut self, key: u8, data: &[u8]) -> KeySetResult {
+        let Some(key) = Key::from_u8(key) else {
+            return KeySetResult::InvalidKey;
+        };
+
+        let (buf, buf_len) = match key {
+            // Some keys should not be set by the host:
+            //
+            // * `Ping` always returns PONG
+            // * InstallinatorImageId is set via MGS
+            // * InventorySize always returns our static inventory size
+            Key::Ping | Key::InstallinatorImageId | Key::InventorySize => {
+                return KeySetResult::ReadOnlyKey;
+            }
+            Key::EtcSystem => {
+                (self.etc_system.as_mut_slice(), &mut self.etc_system_len)
+            }
+            Key::DtraceConf => {
+                (self.dtrace_conf.as_mut_slice(), &mut self.dtrace_conf_len)
+            }
+        };
+
+        if data.len() > buf.len() {
+            KeySetResult::DataTooLong
+        } else {
+            buf[..data.len()].copy_from_slice(data);
+            *buf_len = data.len();
+            KeySetResult::Ok
+        }
+    }
 }
 
 struct ServerImpl {
     uart: Usart,
-    tx_msg_buf: &'static mut [u8; MAX_MESSAGE_SIZE],
-    tx_pkt_buf: &'static mut [u8; MAX_PACKET_SIZE],
-    tx_pkt_to_write: Range<usize>,
+    sys: sys_api::Sys,
+    timers: Multitimer<Timers>,
+    tx_buf: TxBuf,
     rx_buf: &'static mut Vec<u8, MAX_PACKET_SIZE>,
     status: Status,
     sequencer: Sequencer,
+    hf: HostFlash,
+    net: Net,
+    cp_agent: ControlPlaneAgent,
+    packrat: Packrat,
     reboot_state: Option<RebootState>,
+    host_kv_storage: HostKeyValueStorage,
 }
 
 impl ServerImpl {
-    fn claim_static_resources(status: Status) -> Self {
-        let (tx_msg_buf, tx_pkt_buf) = mutable_statics! {
-                static mut UART_TX_MSG_BUF: [u8; MAX_MESSAGE_SIZE] = [0; _];
-                static mut UART_TX_PKT_BUF: [u8; MAX_PACKET_SIZE] = [0; _];
-        };
+    fn claim_static_resources() -> Self {
+        let sys = sys_api::Sys::from(SYS.get_task_id());
+        let uart = configure_uart_device(&sys);
+        sp_to_sp3_interrupt_enable(&sys);
+
+        let mut timers = Multitimer::new(notifications::MULTITIMER_BIT);
+        timers.set_timer(
+            Timers::TxPeriodicZeroByte,
+            sys_get_timer().now,
+            Some(Repeat::AfterWake(UART_ZERO_DELAY)),
+        );
+
         Self {
-            uart: configure_uart_device(),
-            tx_msg_buf,
-            tx_pkt_buf,
-            tx_pkt_to_write: 0..0,
+            uart,
+            sys,
+            timers,
+            tx_buf: TxBuf::claim_static_resources(),
             rx_buf: claim_uart_rx_buf(),
-            status,
+            status: Status::empty(),
             sequencer: Sequencer::from(GIMLET_SEQ.get_task_id()),
+            hf: HostFlash::from(HOST_FLASH.get_task_id()),
+            net: Net::from(NET.get_task_id()),
+            cp_agent: ControlPlaneAgent::from(
+                CONTROL_PLANE_AGENT.get_task_id(),
+            ),
+            packrat: Packrat::from(PACKRAT.get_task_id()),
             reboot_state: None,
+            host_kv_storage: HostKeyValueStorage::claim_static_resources(),
+        }
+    }
+
+    fn set_status_impl(&mut self, status: Status) {
+        if status != self.status {
+            self.status = status;
+            // SP_TO_SP3_INT_L: `INT_L` is "interrupt low", so we assert the pin
+            // when we do not have status and deassert it when we do.
+            if self.status.is_empty() {
+                self.sys.gpio_set(SP_TO_SP3_INT_L);
+            } else {
+                self.sys.gpio_reset(SP_TO_SP3_INT_L);
+            }
         }
     }
 
@@ -135,7 +305,7 @@ impl ServerImpl {
     /// transition to A2, we set `self.reboot_state` to
     /// `RebootState::WaitingForA2`. Once we receive the notification from Jefe
     /// that the transition is complete, we'll update that state to
-    /// `RebootState::TransitionToA0At(_)`.
+    /// `RebootState::WaitingInA2RebootDelay` and start our timer.
     ///
     /// If we're not able to instruct the sequencer to transition to A2, we ask
     /// the sequencer what the current state is and handle them
@@ -146,8 +316,8 @@ impl ServerImpl {
     ///    window. We retry.
     /// 2. We're already in A2 - the host is already powered off. If `reboot` is
     ///    true, we set `self.reboot_state` to
-    ///    `RebootState::TransitionToA0At(_)` and will attempt to move back to
-    ///    A0 once we pass that deadline.
+    ///    `RebootState::WaitingInA2RebootDelay` and will attempt to move back
+    ///    to A0 once we pass that deadline.
     /// 3. We're in A1 - this state should be transitory, so we sleep and retry.
     // TODO is error handling in this method correct? I think we should
     // basically only ever succeed in our initial set_state() request, so I
@@ -183,18 +353,21 @@ impl ServerImpl {
                 // just repeat our loop and try again.
                 PowerState::A0
                 | PowerState::A0PlusHP
-                | PowerState::A0Thermtrip => continue,
+                | PowerState::A0Thermtrip
+                | PowerState::A0Reset => continue,
 
                 // If we're already in A2 somehow, we're done.
-                PowerState::A2
-                | PowerState::A2PlusMono
-                | PowerState::A2PlusFans => {
+                PowerState::A2 | PowerState::A2PlusFans => {
                     if reboot {
                         // Somehow we're already in A2 when the host wanted to
                         // reboot; set our reboot timer.
-                        let reboot_at = sys_get_timer().now + A2_REBOOT_DELAY;
+                        self.timers.set_timer(
+                            Timers::WaitingInA2ToReboot,
+                            sys_get_timer().now + A2_REBOOT_DELAY,
+                            None,
+                        );
                         self.reboot_state =
-                            Some(RebootState::TransitionToA0At(reboot_at));
+                            Some(RebootState::WaitingInA2RebootDelay);
                     }
                     return;
                 }
@@ -214,18 +387,29 @@ impl ServerImpl {
         // If we're rebooting and jefe has notified us that we're now in A2,
         // move to A0. Otherwise, ignore this notification.
         match state {
-            PowerState::A2
-            | PowerState::A2PlusMono
-            | PowerState::A2PlusFans => {
+            PowerState::A2 | PowerState::A2PlusFans => {
                 // Were we waiting for a transition to A2? If so, start our
                 // timer for going back to A0.
                 if self.reboot_state == Some(RebootState::WaitingForA2) {
-                    self.reboot_state = Some(RebootState::TransitionToA0At(
+                    self.timers.set_timer(
+                        Timers::WaitingInA2ToReboot,
                         now + A2_REBOOT_DELAY,
-                    ));
+                        None,
+                    );
+                    self.reboot_state =
+                        Some(RebootState::WaitingInA2RebootDelay);
                 }
             }
             PowerState::A1 => (), // do nothing
+            PowerState::A0Reset => {
+                // We have spontaneously reset.  We are in A0 (and indeed,
+                // by time we get this, the ABL is presumably running), but
+                // we cannot let the SoC simply reset because the true state
+                // of hidden cores is unknown:  explicitly bounce to A2
+                // as if the host had requested it.
+                self.power_off_host(true);
+            }
+
             PowerState::A0 | PowerState::A0PlusHP | PowerState::A0Thermtrip => {
                 // TODO should we clear self.reboot_state here? What if we
                 // transitioned from one A0 state to another? For now, leave it
@@ -235,25 +419,76 @@ impl ServerImpl {
         }
     }
 
+    // State diagram for our uart handler:
+    //
+    //      Start (main)
+    //          │
+    //==========│========================================================
+    //   ┌──────▼──────────────────────────────────────┐
+    // ┌─► Enable repeating Timers::TxPeriodicZeroByte ◄──┐
+    // │ └─────────────────────────────────────────────┘  │
+    //=│==================================================│==============
+    // │  ┌────────────────────┐                          │success
+    // │  │   Are we waiting   │     ┌──────────────┐     │
+    // │  │to build a response?│   ┌─►try to tx 0x00├─────┘
+    // │  └┬────────┬──────────┘   │ └─┬────────────┘
+    // │   │no      │yes           │   │
+    // │   │    ┌───▼────────┐     │   │TX FIFO full
+    // │   │    │Cancel timer│     │ ┌─▼─────────────┐
+    // │   │    └────────────┘     │ │Enable TX FIFO ◄────────────────┐
+    // │   │                       │ │empty interrupt│                │
+    // │ ┌─▼────────────────────┐no│ └─┬─────────────┘                │
+    // │ │Do we have packet data├──┘   │                              │
+    // │ │to tx, or have we rx'd│yes┌──▼────────────────────┐         │
+    // │ │   a partial packet?  ├───►Wait for Uart interrupt◄───── ─┐ │
+    // │ └──────────────────────┘   └─┬─────────────────────┘       │ │
+    // │                              │                             │ │
+    // │                              │interrupt received           │ │
+    // │Timer Interrupt Handler       │                             │ │
+    //=│==============================▼=============================│=│==
+    // │Uart Interrupt Handler                                      │ │
+    // │   ┌─────────────────────────────┐                          │ │
+    // │   │Do we have packet data to tx?├───┐                      │ │
+    // │   └──────────────┬───────▲──────┘   │yes                   │ │
+    // │                  │no     │          │                      │ │
+    // │       ┌──────────▼────┐  │  ┌───────▼───────────┐          │ │
+    // │       │Disable TX FIFO│  │  │try to tx data byte│          │ │
+    // │       │empty interrupt│  │  └─┬──────────▲──┬───┘          │ │
+    // │       └──────────┬────┘  │    │success   │  │tx fifo full  │ │
+    // │                  │       └────┘          │  │              │ │
+    // │                  │                       │  │              │ │
+    // │         fail ┌───▼──────────────┐◄─────┐ │ ┌▼────────────┐ │ │
+    // │         ┌────┤Try to rx one byte│      │ │ │Do we have an│ │ │no
+    // │         │    └───┬──────────────┘◄──┐  │ │ │out-of-order ├─┼─┘
+    // │         │        │success           │  │ │ │request from │ │
+    // │         │    ┌───▼──────────────┐no │  │ │ │the host?    │ │
+    // │         │    │ Is this a packet ├───┘  │ │ └─┬───────────┘ │
+    // │         │    │terminator (0x00)?│      │ │   │             │
+    // │         │    └───┬──────────────┘      │ │ ┌─▼─────────┐   │
+    // │         │        │yes                  │ │ │Discard any│   │
+    // │         │      ┌─▼────────────┐ yes    │ │ │remaining  │   │
+    // │         │      │Is this packet├────────┘ │ │tx data    │   │
+    // │         │      │    empty?    │          │ └──┬────────┘   │
+    // │         │      └─┬────────────┘          │    │            │
+    // │         │        │no                     │    │            │
+    // │         │      ┌─▼─────────────┐         │    │            │
+    // │         │      │Process Message◄─────────┼────┘            │
+    // │         │      └─┬─────────────┘         │                 │
+    // │         │        │                       │                 │
+    // │         │      ┌─▼─────────────┐ yes     │                 │
+    // │         │      │ Do we have a  ├─────────┘                 │
+    // │         │      │response ready?│                           │
+    // │         │      └─────┬─────────┘  ┌──────────────────────┐ │
+    // │         │            │ no         │Wait to build         │ │
+    // │         │            └────────────►response (notification│ │
+    // │         │                         │from another task)    │ │
+    // │         │                         └──────────────────────┘ │
+    // │        ┌▼────────────────┐                                 │
+    // └────────┤  Have we rx'd   ├─────────────────────────────────┘
+    //       no │a partial packet?│ yes
+    //          └─────────────────┘
     fn handle_usart_notification(&mut self) {
         'tx: loop {
-            // Do we have data to transmit? If so, write as much as we can until
-            // either the fifo fills (in which case we return before trying to
-            // receive more) or we finish flushing.
-            while !self.tx_pkt_to_write.is_empty() {
-                if try_tx_push(
-                    &self.uart,
-                    self.tx_pkt_buf[self.tx_pkt_to_write.start],
-                ) {
-                    self.tx_pkt_to_write.start += 1;
-                } else {
-                    return;
-                }
-            }
-
-            // We're done flushing data; disable the tx fifo interrupt.
-            self.uart.disable_tx_fifo_empty_interrupt();
-
             // Clear any RX overrun errors. If we hit this, we will likely fail
             // to decode the next message from the host, which will cause us to
             // send a `DecodeFailure` response.
@@ -261,102 +496,187 @@ impl ServerImpl {
                 ringbuf_entry!(Trace::UartRxOverrun);
             }
 
-            // Receive until there's no more data or we get a 0x00, signifying
-            // the end of a corncobs packet.
-            while let Some(byte) = self.uart.try_rx_pop() {
-                ringbuf_entry!(Trace::UartRx(byte));
+            let mut processed_out_of_sync_message = false;
 
-                if byte == 0x00 {
-                    // Process message and populate our response into
-                    // `tx_msg_buf`.
-                    let msg_len = self.process_message();
-                    self.rx_buf.clear();
-
-                    if let Some(msg_len) = msg_len {
-                        // Encode our outgoing packet.
-                        let pkt_len = corncobs::encode_buf(
-                            &self.tx_msg_buf[..msg_len],
-                            &mut self.tx_pkt_buf[..],
-                        );
-                        self.tx_pkt_to_write = 0..pkt_len;
-
-                        // Enable tx fifo interrupts, and immediately start
-                        // trying to send our response.
-                        self.uart.enable_tx_fifo_empty_interrupt();
-                        continue 'tx;
+            // Do we have data to transmit? If so, write as much as we can until
+            // either the fifo fills (in which case we return before trying to
+            // receive more) or we finish flushing.
+            while let Some(b) = self.tx_buf.next_byte_to_send() {
+                if self.uart.try_tx_push(b) {
+                    self.tx_buf.advance_one_byte();
+                } else if self.uart_rx_until_maybe_packet() {
+                    // We still have data to send, but the host has sent us a
+                    // packet! First, we'll try to decode it: if that succeeds,
+                    // something has gone wrong (from our point of view the host
+                    // has broken protocol). We'll deal with this by:
+                    //
+                    // 1. Discarding any remaining data we have from the old
+                    //    response.
+                    // 2. Sending a 0x00 terminator so the host can detect the
+                    //    end of that old (partial) packet.
+                    // 3. Handling the new request.
+                    //
+                    // 1 and 2 are covered by calling `tx_buf.reset()`, which
+                    // `process_message` does at our request only if the
+                    // packet decodes successfully. If the packet does not
+                    // decode successfully, we discard it and assume it was line
+                    // noise.
+                    match self.process_message(true) {
+                        Ok(()) => {
+                            processed_out_of_sync_message = true;
+                            ringbuf_entry!(Trace::OutOfSyncRequest);
+                        }
+                        Err(_) => {
+                            ringbuf_entry!(Trace::OutOfSyncRxNoise);
+                        }
                     }
-                } else if self.rx_buf.push(byte).is_err() {
-                    // Message overflow - nothing we can do here except
-                    // discard data. We'll drop this byte and wait til we
-                    // see a 0 to respond, at which point our
-                    // deserialization will presumably fail and we'll send
-                    // back an error. Should we record that we overflowed
-                    // here?
+                } else {
+                    // We have more data to send but the TX FIFO is full; enable
+                    // the TX FIFO empty interrupt and wait for it.
+                    self.timers.clear_timer(Timers::TxPeriodicZeroByte);
+                    self.uart.enable_tx_fifo_empty_interrupt();
+                    return;
                 }
+            }
+
+            // We're done flushing data; disable the tx fifo interrupt.
+            self.uart.disable_tx_fifo_empty_interrupt();
+
+            // It's possible (but unlikely) we've already received a message in
+            // this loop iteration. If we have, skip trying to read a request
+            // here and move on to either looping back to start sending the
+            // response or setting up timers for future interrupts.
+            if !processed_out_of_sync_message
+                && self.uart_rx_until_maybe_packet()
+            {
+                // We received a packet; handle it.
+                if let Err(reason) = self.process_message(false) {
+                    self.tx_buf.encode_decode_failure_reason(reason);
+                }
+            }
+
+            // If we have data to send now, immediately loop back to the
+            // top and start trying to send it.
+            if self.tx_buf.next_byte_to_send().is_some() {
+                continue 'tx;
             }
 
             // We received everything we could out of the rx fifo and we have
             // nothing to send; we're done.
+            //
+            // If we haven't receiving anything, set our timer to send out
+            // periodic zero bytes. If we have received something, leave the
+            // timer clear - we're waiting on more data from the host.
+            if self.rx_buf.is_empty() {
+                self.timers.set_timer(
+                    Timers::TxPeriodicZeroByte,
+                    sys_get_timer().now,
+                    Some(Repeat::AfterWake(UART_ZERO_DELAY)),
+                );
+            } else {
+                self.timers.clear_timer(Timers::TxPeriodicZeroByte);
+            }
             return;
         }
     }
 
+    fn uart_rx_until_maybe_packet(&mut self) -> bool {
+        while let Some(byte) = self.uart.try_rx_pop() {
+            if byte == 0x00 {
+                // COBS terminator; did we get any data?
+                if self.rx_buf.is_empty() {
+                    continue;
+                } else {
+                    return true;
+                }
+            }
+
+            // Not a COBS terminator; buffer it.
+            if self.rx_buf.push(byte).is_err() {
+                // Message overflow - nothing we can do here except
+                // discard data. We'll drop this byte and wait til we
+                // see a 0 to respond, at which point our
+                // deserialization will presumably fail and we'll send
+                // back an error. Should we record that we overflowed
+                // here?
+            }
+        }
+
+        false
+    }
+
+    fn handle_control_plane_agent_notification(&mut self) {
+        // If control-plane-agent notified us, presumably it's telling us that
+        // the data we asked it to fetch is ready.
+        if let Some(phase2) = self.tx_buf.get_waiting_for_phase2_data() {
+            // Borrow `cp_agent` to avoid borrowing `self` in the closure below.
+            let cp_agent = &self.cp_agent;
+
+            self.tx_buf.encode_response(
+                phase2.sequence,
+                &SpToHost::Phase2Data,
+                |dst| {
+                    // Fetch the phase two data directly into `dst` (the buffer
+                    // where we're serializing our response), which is maximally
+                    // sized for what we can send the host in one packet. It is
+                    // almost certainly larger than what control-plane-agent can
+                    // fetch in a single UDP packet.
+                    //
+                    // If we can't get data, all we can do is send the host a
+                    // response with no data; it can decide to retry later.
+                    cp_agent
+                        .get_host_phase2_data(phase2.hash, phase2.offset, dst)
+                        .unwrap_or(0)
+                },
+            );
+
+            // Call our usart handler, because we now have data to send.
+            self.handle_usart_notification();
+        }
+    }
+
     // Process the framed packet sitting in `self.rx_buf`. If it warrants a
-    // response, we return `Some(n)` where n is the length of the outgoing,
-    // unframed message we wrote to `self.tx_msg_buf`.
-    fn process_message(&mut self) -> Option<usize> {
-        let deframed = match corncobs::decode_in_place(self.rx_buf) {
-            Ok(n) => &self.rx_buf[..n],
-            Err(_) => {
-                return Some(populate_with_decode_error(
-                    self.tx_msg_buf,
-                    DecodeFailureReason::Cobs,
-                ));
+    // response, we configure `self.tx_buf` appropriate: either populating it
+    // with a response if we can come up with that response immediately, or
+    // instructing it that we'll fill it in with our response later.
+    //
+    // If `reset_tx_buf` is true AND we successfully decode a packet, we will
+    // call `self.tx_buf.reset()` prior to populating it with a response. This
+    // should only be set to true if we're being called in an "out of sync"
+    // path; see the comments in `handle_usart_notification()` where we check
+    // for an incoming request while we're still trying to send a previous
+    // response.
+    //
+    // This method always (i.e., on success or failure) clears `rx_buf` before
+    // returning to prepare for the next packet.
+    fn process_message(
+        &mut self,
+        reset_tx_buf: bool,
+    ) -> Result<(), DecodeFailureReason> {
+        let (header, request, data) = match parse_received_message(self.rx_buf)
+        {
+            Ok((header, request, data)) => (header, request, data),
+            Err(err) => {
+                ringbuf_entry!(Trace::ParseError(err));
+                self.rx_buf.clear();
+                return Err(err);
             }
         };
+        ringbuf_entry!(Trace::Request {
+            now: sys_get_timer().now,
+            sequence: header.sequence,
+            message: request,
+        });
 
-        let (mut header, request, data) =
-            match host_sp_messages::deserialize::<HostToSp>(deframed) {
-                Ok((header, request, data)) => (header, request, data),
-                Err(HubpackError::Custom) => {
-                    return Some(populate_with_decode_error(
-                        self.tx_msg_buf,
-                        DecodeFailureReason::Crc,
-                    ));
-                }
-                Err(_) => {
-                    return Some(populate_with_decode_error(
-                        self.tx_msg_buf,
-                        DecodeFailureReason::Deserialize,
-                    ));
-                }
-            };
-
-        if header.magic != host_sp_messages::MAGIC {
-            return Some(populate_with_decode_error(
-                self.tx_msg_buf,
-                DecodeFailureReason::MagicMismatch,
-            ));
-        }
-
-        if header.version != host_sp_messages::version::V1 {
-            return Some(populate_with_decode_error(
-                self.tx_msg_buf,
-                DecodeFailureReason::VersionMismatch,
-            ));
-        }
-
-        if header.sequence & SEQ_REPLY != 0 {
-            return Some(populate_with_decode_error(
-                self.tx_msg_buf,
-                DecodeFailureReason::SequenceInvalid,
-            ));
+        // Reset tx_buf if our caller wanted us to in response to a valid
+        // packet.
+        if reset_tx_buf {
+            self.tx_buf.reset();
         }
 
         // We defer any actions until after we've serialized our response to
         // avoid borrow checker issues with calling methods on `self`.
         let mut action = None;
-        let mut response_data: &[u8] = &[];
         let response = match request {
             HostToSp::_Unused => {
                 Some(SpToHost::DecodeFailure(DecodeFailureReason::Deserialize))
@@ -370,75 +690,164 @@ impl ServerImpl {
                 None
             }
             HostToSp::GetBootStorageUnit => {
-                // TODO how do we know the real answer?
-                Some(SpToHost::BootStorageUnit(Bsu::A))
+                // Per RFD 241, the phase 1 device (which we can read via
+                // `hf`) is tightly bound to the BSU, so we can map flash0 to
+                // BSU A and flash1 to BSU B.
+                //
+                // What should we do if we fail to get the device from the host
+                // flash task? That should only happen if `hf` is unable to
+                // respond to us at all, which makes it seem unlikely that the
+                // host could even be up. We'll default to returning Bsu::A.
+                //
+                // Minor TODO: Attempting to get the BSU on a gimletlet will
+                // hang, because the host-flash task hangs indefinitely. We
+                // could replace gimlet-hf-server with a fake on gimletlet if
+                // that becomes onerous.
+                let bsu = match self.hf.get_dev() {
+                    Ok(HfDevSelect::Flash0) | Err(_) => Bsu::A,
+                    Ok(HfDevSelect::Flash1) => Bsu::B,
+                };
+                Some(SpToHost::BootStorageUnit(bsu))
             }
             HostToSp::GetIdentity => {
-                // TODO how do we get our real identity?
-                Some(SpToHost::Identity {
-                    model: 1,
-                    revision: 2,
-                    serial: *b"fake-serial",
-                })
+                // gimlet-seq populates packrat with our identity from VPD prior
+                // to transitioning to A2; if the host has requested that
+                // identity, we're already in A0 and therefore don't have to
+                // wait for packrat. If `get_identity()` fails, it means the
+                // sequencer failed to read our VPD; all we can really do is
+                // send the host a null (default) identity.
+                let identity = self.packrat.get_identity().unwrap_or_default();
+                Some(SpToHost::Identity(identity.into()))
             }
             HostToSp::GetMacAddresses => {
-                // TODO where do we get host MAC addrs?
-                Some(SpToHost::MacAddresses {
-                    base: [0; 6],
-                    count: 1,
-                    stride: 1,
-                })
+                let block = self.net.get_spare_mac_addresses();
+                let response = if block.count.get() > 0 {
+                    let count =
+                        u16::min(block.count.get(), NUM_HOST_MAC_ADDRESSES);
+                    SpToHost::MacAddresses {
+                        base: block.base_mac,
+                        count,
+                        stride: block.stride,
+                    }
+                } else {
+                    SpToHost::MacAddresses {
+                        base: [0; 6],
+                        count: 0,
+                        stride: 0,
+                    }
+                };
+                Some(response)
             }
             HostToSp::HostBootFailure { .. } => {
-                // TODO what do we do in reaction to this? reboot?
+                // TODO forward to MGS
+                //
+                // For now, copy it into a static var we can pull out via
+                // `humility readvar LAST_HOST_BOOT_FAIL`.
+                let n = usize::min(
+                    data.len(),
+                    self.host_kv_storage.last_boot_fail.len(),
+                );
+                self.host_kv_storage.last_boot_fail[..n]
+                    .copy_from_slice(&data[..n]);
+                for b in &mut self.host_kv_storage.last_boot_fail[n..] {
+                    *b = 0;
+                }
                 Some(SpToHost::Ack)
             }
             HostToSp::HostPanic { .. } => {
-                // TODO log event and/or forward to MGS
+                // TODO forward to MGS
+                //
+                // For now, copy it into a static var we can pull out via
+                // `humility readvar LAST_HOST_PANIC`.
+                let n = usize::min(
+                    data.len(),
+                    self.host_kv_storage.last_panic.len(),
+                );
+                self.host_kv_storage.last_panic[..n]
+                    .copy_from_slice(&data[..n]);
+                for b in &mut self.host_kv_storage.last_panic[n..] {
+                    *b = 0;
+                }
                 Some(SpToHost::Ack)
             }
-            HostToSp::GetStatus => Some(SpToHost::Status(self.status)),
-            HostToSp::ClearStatus { mask } => {
-                ringbuf_entry!(Trace::ClearStatus { mask });
-                self.status &= Status::from_bits_truncate(!mask);
-                Some(SpToHost::Status(self.status))
+            HostToSp::GetStatus => Some(SpToHost::Status {
+                status: self.status,
+                startup: self.packrat.get_next_boot_host_startup_options(),
+            }),
+            HostToSp::AckSpStart => {
+                action =
+                    Some(Action::ClearStatusBits(Status::SP_TASK_RESTARTED));
+                Some(SpToHost::Ack)
             }
-            HostToSp::GetAlert { mask: _ } => {
+            HostToSp::GetAlert => {
                 // TODO define alerts
                 Some(SpToHost::Alert { action: 0 })
             }
             HostToSp::RotRequest => {
-                // TODO forward request to RoT; for now just echo
-                response_data = data;
+                // TODO forward request to RoT
                 Some(SpToHost::RotResponse)
             }
             HostToSp::RotAddHostMeasurements => {
                 // TODO forward request to RoT
                 Some(SpToHost::Ack)
             }
-            HostToSp::GetPhase2Data { start, count: _ } => {
-                // TODO forward real data
-                response_data = b"hello world";
-                Some(SpToHost::Phase2Data { start })
+            HostToSp::GetPhase2Data { hash, offset } => {
+                // We don't have a response to transmit now, but need to avoid
+                // sending periodic 0s until we do have a response. Instruct
+                // `tx_buf` that we're waiting for the host phase2 data to show
+                // up.
+                self.tx_buf.set_waiting_for_phase2_data(
+                    header.sequence,
+                    hash,
+                    offset,
+                );
+
+                // Ask control-plane-agent to fetch this data for us; it will
+                // notify us when it arrives.
+                self.cp_agent
+                    .fetch_host_phase2_data(
+                        hash,
+                        offset,
+                        notifications::CONTROL_PLANE_AGENT_BIT,
+                    )
+                    .unwrap_lite();
+                None
+            }
+            HostToSp::KeyLookup {
+                key,
+                max_response_len,
+            } => match self.perform_key_lookup(
+                header.sequence,
+                key,
+                usize::from(max_response_len),
+            ) {
+                Ok(()) => {
+                    // perform_key_lookup() calls encodes the response directly
+                    // when it succeeds, so we have nothing else to do.
+                    None
+                }
+                Err(err) => Some(SpToHost::KeyLookupResult(err)),
+            },
+            HostToSp::KeySet { key } => Some(SpToHost::KeySetResult(
+                self.host_kv_storage.key_set(key, data),
+            )),
+            HostToSp::GetInventoryData { index } => {
+                match self.perform_inventory_lookup(header.sequence, index) {
+                    Ok(()) => None,
+                    Err(err) => Some(SpToHost::InventoryData {
+                        result: err,
+                        name: [0; 32],
+                    }),
+                }
             }
         };
 
-        // We set the high bit of the sequence number before responding.
-        header.sequence |= SEQ_REPLY;
-
-        // TODO this can panic if `response_data` is too large; where do we
-        // check it before sending a response?
-        let tx_msg_buf = &mut self.tx_msg_buf; // borrow checker workaround
-        let n = response.map(|response| {
-            host_sp_messages::serialize(
-                tx_msg_buf,
-                &header,
-                &response,
-                response_data,
-            )
-            .unwrap_lite()
-            .0
-        });
+        if let Some(response) = response {
+            // If we have a response immediately, we have no extra data to
+            // pack into the packet, hence the 0-returning closure.
+            self.tx_buf
+                .encode_response(header.sequence, &response, |_| 0);
+        }
 
         // Now that all buffer borrowing is done, we can borrow `self` mutably
         // again to perform any necessary action.
@@ -446,52 +855,347 @@ impl ServerImpl {
             match action {
                 Action::RebootHost => self.power_off_host(true),
                 Action::PowerOffHost => self.power_off_host(false),
+                Action::ClearStatusBits(to_clear) => {
+                    self.set_status_impl(self.status.difference(to_clear))
+                }
             }
         }
 
-        n
+        // We've processed the message sitting in rx_buf; clear it.
+        self.rx_buf.clear();
+
+        Ok(())
+    }
+
+    /// On success, we will have already filled `self.tx_buf` with our response.
+    /// On failure, our caller should response with
+    /// `SpToHost::KeyLookupResult(err)` with the error we return.
+    fn perform_key_lookup(
+        &mut self,
+        sequence: u64,
+        key: u8,
+        max_response_len: usize,
+    ) -> Result<(), KeyLookupResult> {
+        let key = Key::from_u8(key).ok_or(KeyLookupResult::InvalidKey)?;
+
+        let response_len = match key {
+            Key::Ping => {
+                const PONG: &[u8] = b"pong";
+
+                self.tx_buf.encode_response(
+                    sequence,
+                    &SpToHost::KeyLookupResult(KeyLookupResult::Ok),
+                    |buf| {
+                        buf[..PONG.len()].copy_from_slice(PONG);
+                        PONG.len()
+                    },
+                );
+                PONG.len()
+            }
+            Key::InstallinatorImageId => {
+                // Borrow `cp_agent` to avoid borrowing `self` in the closure
+                // below.
+                let cp_agent = &self.cp_agent;
+
+                // We don't want to have to set aside our own memory to copy the
+                // installinator image ID (other than our already-allocated
+                // outgoing tx buf), so we will optimistically serialize a
+                // successful response, including the image ID. After
+                // serializing this successful response, we'll check that
+                // `max_response_len` (i.e., the buffer length of the host
+                // process that requested this value) is sufficient; if it is
+                // not (or if we have no installinator image ID at all), we'll
+                // discard the optimistically-serialized response and return an
+                // error.
+                //
+                // We expect both of these "reset and replace the response with
+                // an error" to be extremely rare: host processes should not ask
+                // for an installinator ID with a too-small buffer, and should
+                // only ask for an installinator ID during a recovery process in
+                // which we expect MGS has already given us an ID.
+                let mut response_len = 0;
+                self.tx_buf.encode_response(
+                    sequence,
+                    &SpToHost::KeyLookupResult(KeyLookupResult::Ok),
+                    |mut buf| {
+                        // Statically guarantee we have sufficient space in
+                        // `buf` for the installinator image ID blob, and then
+                        // cap `buf` to that length to satisfy the idol
+                        // operation length limit.
+                        const_assert!(
+                            MIN_SP_TO_HOST_FILL_DATA_LEN
+                                >= MAX_INSTALLINATOR_IMAGE_ID_LEN
+                        );
+                        buf = &mut buf[..MAX_INSTALLINATOR_IMAGE_ID_LEN];
+
+                        response_len = cp_agent.get_installinator_image_id(buf);
+                        response_len
+                    },
+                );
+
+                // A response length of 0 is how `control-plane-agent` indicates
+                // we do not have an installinator image ID; instead of
+                // returning a 0-length success to the host, convert it to the
+                // "we have no value for this key" error.
+                if response_len == 0 {
+                    self.tx_buf.reset();
+                    return Err(KeyLookupResult::NoValueForKey);
+                }
+                response_len
+            }
+            Key::InventorySize => {
+                // We reply with a tuple of count, API version:
+                const REPLY: (u32, u32) =
+                    (ServerImpl::INVENTORY_COUNT, INVENTORY_API_VERSION);
+                let mut response_len = 0;
+                self.tx_buf.encode_response(
+                    sequence,
+                    &SpToHost::KeyLookupResult(KeyLookupResult::Ok),
+                    |buf| {
+                        const_assert!(
+                            MIN_SP_TO_HOST_FILL_DATA_LEN
+                                >= core::mem::size_of::<u32>() * 2
+                        );
+                        response_len =
+                            hubpack::serialize(buf, &REPLY).unwrap_lite();
+                        response_len
+                    },
+                );
+                response_len
+            }
+            Key::EtcSystem => {
+                let response_len = self.host_kv_storage.etc_system_len;
+                if response_len == 0 {
+                    return Err(KeyLookupResult::NoValueForKey);
+                }
+
+                self.tx_buf.encode_response(
+                    sequence,
+                    &SpToHost::KeyLookupResult(KeyLookupResult::Ok),
+                    |buf| {
+                        // Statically guarantee we have sufficient space in
+                        // `buf` for longest possible ETC_SYSTEM blob.
+                        const_assert!(
+                            MIN_SP_TO_HOST_FILL_DATA_LEN >= MAX_ETC_SYSTEM_LEN
+                        );
+                        buf[..response_len].copy_from_slice(
+                            &self.host_kv_storage.etc_system[..response_len],
+                        );
+                        response_len
+                    },
+                );
+                response_len
+            }
+            Key::DtraceConf => {
+                let response_len = self.host_kv_storage.dtrace_conf_len;
+                if response_len == 0 {
+                    return Err(KeyLookupResult::NoValueForKey);
+                }
+
+                self.tx_buf.encode_response(
+                    sequence,
+                    &SpToHost::KeyLookupResult(KeyLookupResult::Ok),
+                    |buf| {
+                        // `MIN_SP_TO_HOST_FILL_DATA_LEN` is calculated assuming
+                        // `SpToHost::MAX_SIZE`, but we know in this callback
+                        // we're appending to
+                        // `SpToHost::KeyLookupResult(KeyLookupResult::Ok)`,
+                        // which is only 2 bytes. Recompute the exact max space
+                        // we have for our response, then statically guarantee
+                        // we have sufficient space in `buf` for longest
+                        // possible DTRACE_CONF blob.
+                        const SP_TO_HOST_FILL_DATA_LEN: usize =
+                            MIN_SP_TO_HOST_FILL_DATA_LEN + SpToHost::MAX_SIZE
+                                - 2;
+                        const_assert!(
+                            SP_TO_HOST_FILL_DATA_LEN >= MAX_DTRACE_CONF_LEN
+                        );
+
+                        buf[..response_len].copy_from_slice(
+                            &self.host_kv_storage.dtrace_conf[..response_len],
+                        );
+                        response_len
+                    },
+                );
+                response_len
+            }
+        };
+
+        if response_len > max_response_len {
+            self.tx_buf.reset();
+            Err(KeyLookupResult::MaxResponseLenTooShort)
+        } else {
+            Ok(())
+        }
     }
 }
 
-// approximately idol_runtime::NotificationHandler, in anticipation of
-// eventually having an idol interface (at least for mgmt-gateway to give us
-// host phase 2 data)
-impl ServerImpl {
+impl NotificationHandler for ServerImpl {
+    fn current_notification_mask(&self) -> u32 {
+        notifications::USART_IRQ_MASK
+            | notifications::JEFE_STATE_CHANGE_MASK
+            | notifications::MULTITIMER_MASK
+            | notifications::CONTROL_PLANE_AGENT_MASK
+    }
+
     fn handle_notification(&mut self, bits: u32) {
-        if bits & USART_IRQ != 0 {
+        if bits & notifications::USART_IRQ_MASK != 0 {
             self.handle_usart_notification();
-            sys_irq_control(USART_IRQ, true);
+            sys_irq_control(notifications::USART_IRQ_MASK, true);
         }
 
-        if bits & JEFE_STATE_CHANGE_IRQ != 0 {
+        if bits & notifications::JEFE_STATE_CHANGE_MASK != 0 {
             self.handle_jefe_notification(
                 self.sequencer.get_state().unwrap_lite(),
             );
         }
 
-        if bits & TIMER_IRQ != 0 {
-            // If we're past the deadline for transitioning to A0, attempt to do
-            // that.
-            if let Some(RebootState::TransitionToA0At(deadline)) =
-                self.reboot_state
-            {
-                if sys_get_timer().now >= deadline {
-                    // The only way our reboot state gets set to
-                    // `TransitionToA0At` is if we believe we were currently in
-                    // A2. Attempt to transition to A0, which can only fail if
-                    // we're no longer in A2. In either case (we successfully
-                    // started the transition or we're no longer in A2 due to
-                    // some external cause), we've done what we can to reboot,
-                    // so clear out `reboot_state`.
-                    ringbuf_entry!(Trace::SetState {
-                        now: sys_get_timer().now,
-                        state: PowerState::A0,
-                    });
-                    _ = self.sequencer.set_state(PowerState::A0);
-                    self.reboot_state = None;
+        if bits & notifications::CONTROL_PLANE_AGENT_MASK != 0 {
+            self.handle_control_plane_agent_notification();
+        }
+
+        // We may want to clear our TX periodic zero byte timer (if the TX FIFO
+        // is full), but we can't modify the timers while iterating over them.
+        // We'll record whether or not we want to clear the timer in this
+        // variable, then actually clear it (if needed) after the loop over the
+        // fired timers.
+        self.timers.handle_notification(bits);
+        let mut tx_timer_disposition = TimerDisposition::LeaveRunning;
+        for t in self.timers.iter_fired() {
+            match t {
+                Timers::WaitingInA2ToReboot => {
+                    handle_reboot_waiting_in_a2_timer(
+                        &self.sequencer,
+                        &mut self.reboot_state,
+                    );
+                }
+                Timers::TxPeriodicZeroByte => {
+                    tx_timer_disposition = handle_tx_periodic_zero_byte_timer(
+                        &self.uart,
+                        &self.tx_buf,
+                        self.rx_buf,
+                    );
                 }
             }
         }
+
+        match tx_timer_disposition {
+            TimerDisposition::LeaveRunning => (),
+            TimerDisposition::Cancel => {
+                self.timers.clear_timer(Timers::TxPeriodicZeroByte);
+            }
+        }
+    }
+}
+
+// This is conceptually a method on `ServerImpl`, but it takes a reference to
+// `rx_buf` instead of `self` to avoid borrow checker issues.
+fn parse_received_message(
+    rx_buf: &mut [u8],
+) -> Result<(Header, HostToSp, &[u8]), DecodeFailureReason> {
+    let n = corncobs::decode_in_place(rx_buf)
+        .map_err(|_| DecodeFailureReason::Cobs)?;
+    let deframed = &rx_buf[..n];
+
+    let (header, request, data) =
+        host_sp_messages::deserialize::<HostToSp>(deframed)?;
+
+    if header.magic != host_sp_messages::MAGIC {
+        return Err(DecodeFailureReason::MagicMismatch);
+    }
+
+    if header.version != host_sp_messages::version::V1 {
+        return Err(DecodeFailureReason::VersionMismatch);
+    }
+
+    if header.sequence & SEQ_REPLY != 0 {
+        return Err(DecodeFailureReason::SequenceInvalid);
+    }
+
+    Ok((header, request, data))
+}
+
+// This is conceptually a method on `ServerImpl`, but it takes references to
+// several of its fields instead of `self` to avoid borrow checker issues.
+fn handle_reboot_waiting_in_a2_timer(
+    sequencer: &Sequencer,
+    reboot_state: &mut Option<RebootState>,
+) {
+    // If we're past the deadline for transitioning to A0, attempt to do so.
+    if let Some(RebootState::WaitingInA2RebootDelay) = reboot_state {
+        // The only way our reboot state gets set to
+        // `WaitingInA2RebootDelay` is if we believe we were currently in
+        // A2. Attempt to transition to A0, which can only fail if we're no
+        // longer in A2. In either case (we successfully started the
+        // transition or we're no longer in A2 due to some external cause),
+        // we've done what we can to reboot, so clear out `reboot_state`.
+        ringbuf_entry!(Trace::SetState {
+            now: sys_get_timer().now,
+            state: PowerState::A0,
+        });
+        _ = sequencer.set_state(PowerState::A0);
+        *reboot_state = None;
+    }
+}
+
+// This is conceptually a method on `ServerImpl`, but it takes references to
+// several of its fields instead of `self` to avoid borrow checker issues.
+fn handle_tx_periodic_zero_byte_timer(
+    uart: &Usart,
+    tx_buf: &TxBuf,
+    rx_buf: &Vec<u8, MAX_PACKET_SIZE>,
+) -> TimerDisposition {
+    if tx_buf.should_send_periodic_zero_bytes() && rx_buf.is_empty() {
+        // We don't have a real packet we're sending and we haven't
+        // started receiving a request from the host; try to send a
+        // 0x00 terminator. If we can, reset the deadline to send
+        // another one after `UART_ZERO_DELAY`; if we can't, disable
+        // our timer and wait for a uart interrupt instead.
+        if uart.try_tx_push(0) {
+            TimerDisposition::LeaveRunning
+        } else {
+            // If we have no real packet data but we've filled the
+            // TX FIFO (presumably with zeroes from this deadline
+            // firing $TX_FIFO_DEPTH times, although possibly
+            // because we just finished sending a real packet),
+            // we're waiting on the host to read the data out of our
+            // TX FIFO: we don't need to push any more zeroes until
+            // the host has read everything out of our FIFO.
+            // Therefore, enable the TX FIFO empty interrupt and
+            // stop waking up on a timer; when the uart interrupt
+            // fires (either due to the host sending us data or
+            // draining the TX FIFO), we'll reset the timer then if
+            // needed.
+            uart.enable_tx_fifo_empty_interrupt();
+            TimerDisposition::Cancel
+        }
+    } else {
+        // We're either sending or receiving a real packet; disable
+        // our "sending 0s" timer until that finishes. The
+        // appropriate uart interrupt(s) are already enabled.
+        TimerDisposition::Cancel
+    }
+}
+
+impl idl::InOrderHostSpCommsImpl for ServerImpl {
+    fn set_status(
+        &mut self,
+        _msg: &userlib::RecvMessage,
+        status: u64,
+    ) -> Result<(), RequestError<HostSpCommsError>> {
+        let status =
+            Status::from_bits(status).ok_or(HostSpCommsError::InvalidStatus)?;
+
+        self.set_status_impl(status);
+
+        Ok(())
+    }
+
+    fn get_status(
+        &mut self,
+        _msg: &userlib::RecvMessage,
+    ) -> Result<Status, RequestError<HostSpCommsError>> {
+        Ok(self.status)
     }
 }
 
@@ -500,41 +1204,11 @@ impl ServerImpl {
 enum Action {
     RebootHost,
     PowerOffHost,
-}
-
-// wrapper around `usart.try_tx_push()` that registers the result in our
-// ringbuf
-fn try_tx_push(uart: &Usart, val: u8) -> bool {
-    let ret = uart.try_tx_push(val);
-    if ret {
-        ringbuf_entry!(Trace::UartTx(val));
-    } else {
-        ringbuf_entry!(Trace::UartTxFull);
-    }
-    ret
-}
-
-fn populate_with_decode_error(
-    out: &mut [u8; MAX_MESSAGE_SIZE],
-    reason: DecodeFailureReason,
-) -> usize {
-    let header = Header {
-        magic: host_sp_messages::MAGIC,
-        version: host_sp_messages::version::V1,
-        // We failed to decode, so don't know the sequence number.
-        sequence: 0xffff_ffff_ffff_ffff,
-    };
-    let response = SpToHost::DecodeFailure(reason);
-
-    // Serializing can only fail if we pass unexpected types as `response`, but
-    // we're using `SpToHost`, so it cannot fail.
-    host_sp_messages::serialize(out, &header, &response, &[])
-        .unwrap_lite()
-        .0
+    ClearStatusBits(Status),
 }
 
 #[cfg(any(feature = "stm32h743", feature = "stm32h753"))]
-fn configure_uart_device() -> Usart {
+fn configure_uart_device(sys: &sys_api::Sys) -> Usart {
     use drv_usart::device;
     use drv_usart::drv_stm32xx_sys_api::*;
 
@@ -574,7 +1248,7 @@ fn configure_uart_device() -> Usart {
     }
 
     Usart::turn_on(
-        &Sys::from(SYS.get_task_id()),
+        sys,
         usart,
         peripheral,
         pins,
@@ -582,6 +1256,34 @@ fn configure_uart_device() -> Usart {
         BAUD_RATE,
         hardware_flow_control,
     )
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(any(
+        target_board = "gimlet-b",
+        target_board = "gimlet-c",
+        target_board = "gimlet-d",
+        target_board = "gimlet-e",
+    ))] {
+        const SP_TO_SP3_INT_L: sys_api::PinSet = sys_api::Port::I.pin(7);
+    } else if #[cfg(target_board = "gimletlet-2")] {
+        // gimletlet doesn't have an SP3 to interrupt, but we can wire up an LED
+        // to one of the exposed E2-E6 pins to see it visually.
+        const SP_TO_SP3_INT_L: sys_api::PinSet = sys_api::Port::E.pin(2);
+    } else {
+        compile_error!("unsupported target board");
+    }
+}
+
+fn sp_to_sp3_interrupt_enable(sys: &sys_api::Sys) {
+    sys.gpio_set(SP_TO_SP3_INT_L);
+
+    sys.gpio_configure_output(
+        SP_TO_SP3_INT_L,
+        sys_api::OutputType::OpenDrain,
+        sys_api::Speed::Low,
+        sys_api::Pull::None,
+    );
 }
 
 fn claim_uart_rx_buf() -> &'static mut Vec<u8, MAX_PACKET_SIZE> {
@@ -600,3 +1302,10 @@ fn claim_uart_rx_buf() -> &'static mut Vec<u8, MAX_PACKET_SIZE> {
     // other reference in the program.
     unsafe { &mut UART_RX_BUF }
 }
+
+mod idl {
+    use task_host_sp_comms_api::{HostSpCommsError, Status};
+    include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
+}
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

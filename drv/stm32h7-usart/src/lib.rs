@@ -21,7 +21,6 @@ pub use stm32h7::stm32h743 as device;
 pub use stm32h7::stm32h753 as device;
 
 use drv_stm32xx_sys_api::{Alternate, Peripheral, PinSet, Sys};
-use userlib::UnwrapLite;
 
 /// Handle to an enabled USART device.
 pub struct Usart {
@@ -86,8 +85,7 @@ impl Usart {
                 drv_stm32xx_sys_api::Speed::Low,
                 drv_stm32xx_sys_api::Pull::None,
                 alternate,
-            )
-            .unwrap_lite();
+            );
         }
 
         // Enable RX interrupts from the USART side.
@@ -133,6 +131,14 @@ impl Usart {
         }
     }
 
+    pub fn enable_rx_interrupt(&self) {
+        self.usart.cr1.modify(|_, w| w.rxneie().enabled());
+    }
+
+    pub fn disable_rx_interrupt(&self) {
+        self.usart.cr1.modify(|_, w| w.rxneie().disabled());
+    }
+
     // TODO? The name of these methods may be bad if we allow callers to specify
     // the tx fifo threshold (and can set it to something other than "empty")
     pub fn enable_tx_fifo_empty_interrupt(&self) {
@@ -141,5 +147,10 @@ impl Usart {
 
     pub fn disable_tx_fifo_empty_interrupt(&self) {
         self.usart.cr3.modify(|_, w| w.txftie().clear_bit());
+    }
+
+    pub fn send_break(&self) {
+        self.usart.rqr.write(|w| w.sbkrq().set_bit());
+        // TODO: should we wait for the flag (SBKF) to clear?
     }
 }

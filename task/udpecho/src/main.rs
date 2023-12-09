@@ -38,18 +38,33 @@ fn main() -> ! {
                         Ok(()) => break,
                         Err(SendError::QueueFull) => {
                             // Our outgoing queue is full; wait for space.
-                            sys_recv_closed(&mut [], 1, TaskId::KERNEL)
-                                .unwrap();
+                            sys_recv_closed(
+                                &mut [],
+                                notifications::SOCKET_MASK,
+                                TaskId::KERNEL,
+                            )
+                            .unwrap();
                         }
-                        Err(SendError::NotYours) => panic!(),
-                        Err(SendError::InvalidVLan) => panic!(),
-                        Err(SendError::Other) => panic!(),
+                        Err(
+                            SendError::ServerRestarted
+                            | SendError::NotYours
+                            | SendError::InvalidVLan
+                            | SendError::Other,
+                        ) => panic!(),
                     }
                 }
             }
             Err(RecvError::QueueEmpty) => {
                 // Our incoming queue is empty. Wait for more packets.
-                sys_recv_closed(&mut [], 1, TaskId::KERNEL).unwrap();
+                sys_recv_closed(
+                    &mut [],
+                    notifications::SOCKET_MASK,
+                    TaskId::KERNEL,
+                )
+                .unwrap();
+            }
+            Err(RecvError::ServerRestarted) => {
+                // `net` restarted (probably due to the watchdog); just retry.
             }
             Err(RecvError::NotYours) => panic!(),
             Err(RecvError::Other) => panic!(),
@@ -61,3 +76,5 @@ fn main() -> ! {
 
 static UDP_ECHO_COUNT: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

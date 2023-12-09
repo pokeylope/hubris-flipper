@@ -1,32 +1,44 @@
 [package]
 name = "task-power"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-userlib = {path = "../../sys/userlib", features = ["panic-messages"]}
-ringbuf = {path = "../../lib/ringbuf" }
-drv-i2c-api = {path = "../../drv/i2c-api"}
-cortex-m = {version = "0.7", features = ["inline-asm"]}
-zerocopy = "0.6.1"
-cfg-if = "1"
+cfg-if.workspace = true
+cortex-m.workspace = true
+hubpack.workspace = true
+idol-runtime.workspace = true
+num-traits.workspace = true
+paste.workspace = true
+pmbus.workspace = true
+serde.workspace = true
+static_assertions.workspace = true
+zerocopy.workspace = true
+
+drv-gimlet-seq-api = { path = "../../drv/gimlet-seq-api", optional = true }
+drv-i2c-api = { path = "../../drv/i2c-api" }
 drv-i2c-devices = { path = "../../drv/i2c-devices" }
-drv-gimlet-seq-api = {path = "../../drv/gimlet-seq-api", optional = true}
-drv-sidecar-seq-api = {path = "../../drv/sidecar-seq-api", optional = true}
-task-sensor-api = {path = "../sensor-api"}
-paste = "1.0.6"
+drv-sidecar-seq-api = { path = "../../drv/sidecar-seq-api", optional = true }
+drv-stm32xx-sys-api = { path = "../../drv/stm32xx-sys-api", features = ["family-stm32h7"], optional = true }
+mutable-statics = { path = "../../lib/mutable-statics" }
+ringbuf = { path = "../../lib/ringbuf"  }
+task-power-api = { path = "../power-api" }
+task-sensor-api = { path = "../sensor-api" }
+userlib = { path = "../../sys/userlib", features = ["panic-messages"] }
 
 [build-dependencies]
-build-util = {path = "../../build/util"}
-build-i2c = {path = "../../build/i2c"}
-anyhow = "1.0.31"
-cfg-if = "1"
+anyhow.workspace = true
+cfg-if.workspace = true
+idol.workspace = true
+
+build-i2c = { path = "../../build/i2c" }
+build-util = { path = "../../build/util" }
 
 [features]
 gimlet = ["drv-gimlet-seq-api", "h753"]
 sidecar = ["drv-sidecar-seq-api", "h753"]
-itm = [ "userlib/log-itm" ]
-semihosting = [ "userlib/log-semihosting" ]
+psc = ["drv-stm32xx-sys-api", "h753"]
+dc2024 = ["drv-stm32xx-sys-api", "h753"]
 h743 = ["build-i2c/h743"]
 h753 = ["build-i2c/h753"]
 h7b3 = ["build-i2c/h7b3"]
@@ -36,4 +48,5 @@ h7b3 = ["build-i2c/h7b3"]
 [[bin]]
 name = "task-power"
 test = false
+doctest = false
 bench = false

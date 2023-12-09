@@ -5,17 +5,6 @@
 #![no_std]
 #![no_main]
 
-#[cfg(not(any(feature = "panic-itm", feature = "panic-semihosting")))]
-compile_error!(
-    "Must have either feature panic-itm or panic-semihosting enabled"
-);
-
-// Panic behavior controlled by Cargo features:
-#[cfg(feature = "panic-itm")]
-extern crate panic_itm; // breakpoint on `rust_begin_unwind` to catch panics
-#[cfg(feature = "panic-semihosting")]
-extern crate panic_semihosting; // requires a debugger
-
 // We have to do this if we don't otherwise use it to ensure its vector table
 // gets linked in.
 extern crate stm32h7;
@@ -26,11 +15,17 @@ use drv_stm32h7_startup::ClockConfig;
 
 use cortex_m_rt::entry;
 
+#[cfg(feature = "traptrace")]
+mod tracing;
+
 #[entry]
 fn main() -> ! {
     system_init();
 
     const CYCLES_PER_MS: u32 = 400_000;
+
+    #[cfg(feature = "traptrace")]
+    kern::profiling::configure_events_table(tracing::table());
 
     unsafe { kern::startup::start_kernel(CYCLES_PER_MS) }
 }
@@ -116,9 +111,15 @@ fn system_init() {
 
     cfg_if::cfg_if! {
         if #[cfg(target_board = "gimlet-a")] {
-            let expected_rev = 0b111;
+            compile_error!("gimlet-a is deprecated and no image for it exists");
         } else if #[cfg(target_board = "gimlet-b")] {
             let expected_rev = 0b001;
+        } else if #[cfg(target_board = "gimlet-c")] {
+            let expected_rev = 0b010;
+        } else if #[cfg(target_board = "gimlet-d")] {
+            let expected_rev = 0b011;
+        } else if #[cfg(target_board = "gimlet-e")] {
+            let expected_rev = 0b111; // hardware-gimlet#1952
         } else {
             compile_error!("not a recognized gimlet board")
         }

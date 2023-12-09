@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use anyhow::Result;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -62,10 +63,10 @@ pub struct BufSize {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct TaskNote {
     pub name: String,
-    pub notification: u32,
+    pub notification: String,
 }
 
-pub fn load_net_config() -> Result<NetConfig, Box<dyn std::error::Error>> {
+pub fn load_net_config() -> Result<NetConfig> {
     let cfg = build_util::config::<GlobalConfig>()?.net;
 
     match (cfg!(feature = "vlan"), cfg.vlan.is_some()) {
@@ -110,11 +111,38 @@ pub fn generate_socket_enum(
         out,
         "#[derive(Copy, Clone, Debug, Eq, PartialEq, userlib::FromPrimitive)]"
     )?;
-    writeln!(out, "#[derive(serde::Serialize, serde::Deserialize)]")?;
+    writeln!(
+        out,
+        "#[derive(serde::Serialize, \
+                  serde::Deserialize, \
+                  hubpack::SerializedSize)]"
+    )?;
     writeln!(out, "pub enum SocketName {{")?;
     for (i, name) in config.sockets.keys().enumerate() {
         writeln!(out, "    {} = {},", name, i)?;
     }
     writeln!(out, "}}")?;
+
+    writeln!(
+        out,
+        "#[allow(unused)]\
+        pub const SOCKET_TX_SIZE: [usize; {}] = [",
+        config.sockets.len(),
+    )?;
+    for c in config.sockets.values() {
+        writeln!(out, "{},", c.tx.bytes)?;
+    }
+    writeln!(out, "];")?;
+    writeln!(
+        out,
+        "#[allow(unused)]\
+        pub const SOCKET_RX_SIZE: [usize; {}] = [",
+        config.sockets.len(),
+    )?;
+    for c in config.sockets.values() {
+        writeln!(out, "{},", c.rx.bytes)?;
+    }
+    writeln!(out, "];")?;
+
     Ok(())
 }

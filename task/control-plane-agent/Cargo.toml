@@ -1,0 +1,65 @@
+[package]
+name = "task-control-plane-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cfg-if.workspace = true
+gateway-messages.workspace = true
+heapless.workspace = true
+idol-runtime.workspace = true
+num-traits.workspace = true
+serde.workspace = true
+ssmarshal.workspace = true
+static_assertions.workspace = true
+zerocopy.workspace = true
+
+drv-auxflash-api = { path = "../../drv/auxflash-api", optional = true }
+drv-caboose = { path = "../../drv/caboose" }
+drv-caboose-pos = { path = "../../drv/caboose-pos" }
+drv-gimlet-hf-api = { path = "../../drv/gimlet-hf-api", optional = true }
+drv-gimlet-seq-api = { path = "../../drv/gimlet-seq-api", optional = true }
+drv-ignition-api = { path = "../../drv/ignition-api", optional = true }
+drv-lpc55-update-api = { path = "../../drv/lpc55-update-api" }
+drv-monorail-api = { path = "../../drv/monorail-api", optional = true }
+drv-sidecar-seq-api = { path = "../../drv/sidecar-seq-api", optional = true }
+drv-sprot-api = { path = "../../drv/sprot-api" }
+drv-stm32h7-update-api = { path = "../../drv/stm32h7-update-api" }
+drv-stm32h7-usart = { path = "../../drv/stm32h7-usart", features = ["h753"], optional = true }
+drv-transceivers-api = { path = "../../drv/transceivers-api", optional = true }
+drv-update-api = { path = "../../drv/update-api" }
+drv-user-leds-api = { path = "../../drv/user-leds-api", optional = true }
+host-sp-messages = { path = "../../lib/host-sp-messages" }
+lpc55-rom-data = { path = "../../lib/lpc55-rom-data" }
+mutable-statics = { path = "../../lib/mutable-statics" }
+ringbuf = { path = "../../lib/ringbuf" }
+task-control-plane-agent-api = { path = "../control-plane-agent-api" }
+task-jefe-api = { path = "../jefe-api" }
+task-net-api = { path = "../net-api", features = ["use-smoltcp"] }
+task-packrat-api = { path = "../packrat-api" }
+task-sensor-api = { path = "../sensor-api" }
+task-validate-api = { path = "../validate-api" }
+update-buffer = { path = "../../lib/update-buffer" }
+userlib = { path = "../../sys/userlib", features = ["panic-messages"] }
+
+[build-dependencies]
+build-util = { path = "../../build/util" }
+idol = { workspace = true }
+
+[features]
+gimlet = ["drv-gimlet-hf-api", "drv-gimlet-seq-api", "drv-stm32h7-usart", "drv-user-leds-api"]
+sidecar = ["drv-sidecar-seq-api", "drv-monorail-api", "drv-ignition-api", "drv-transceivers-api"]
+psc = ["drv-user-leds-api"]
+
+vlan = ["task-net-api/vlan"]
+
+usart1 = []
+usart1-gimletlet = []
+baud_rate_3M = []
+auxflash = ["drv-auxflash-api"]
+
+[[bin]]
+name = "task-control-plane-agent"
+test = false
+doctest = false
+bench = false

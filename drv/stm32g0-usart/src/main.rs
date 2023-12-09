@@ -89,10 +89,9 @@ fn main() -> ! {
 
     // Turn on our interrupt. We haven't enabled any interrupt sources at the
     // USART side yet, so this won't trigger notifications yet.
-    sys_irq_control(1, true);
+    sys_irq_control(notifications::USART_IRQ_MASK, true);
 
     // Field messages.
-    let mask = 1;
     let mut tx: Option<Transmit> = None;
 
     loop {
@@ -100,7 +99,7 @@ fn main() -> ! {
             // Buffer (none required)
             &mut [],
             // Notification mask
-            mask,
+            notifications::USART_IRQ_MASK,
             // State to pass through to whichever closure below gets run
             &mut tx,
             // Notification handler
@@ -122,7 +121,7 @@ fn main() -> ! {
                         step_transmit(&usart, txref);
                     }
 
-                    sys_irq_control(1, true);
+                    sys_irq_control(notifications::USART_IRQ_MASK, true);
                 }
             },
             // Message handler
@@ -189,15 +188,13 @@ fn configure_pins() {
     // TODO these are really board configs, not SoC configs!
     const TX_RX_MASK: PinSet = Port::C.pin(4).and_pin(5);
 
-    gpio_driver
-        .gpio_configure_alternate(
-            TX_RX_MASK,
-            OutputType::PushPull,
-            Speed::Low,
-            Pull::None,
-            Alternate::AF1,
-        )
-        .unwrap();
+    gpio_driver.gpio_configure_alternate(
+        TX_RX_MASK,
+        OutputType::PushPull,
+        Speed::Low,
+        Pull::None,
+        Alternate::AF1,
+    );
 }
 
 fn step_transmit(
@@ -222,9 +219,7 @@ fn step_transmit(
 
     if let Some(byte) = txs.caller.borrow(0).read_at::<u8>(txs.pos) {
         // Stuff byte into transmitter.
-        usart
-            .tdr
-            .write(|w| unsafe { w.tdr().bits(u16::from(byte)) });
+        usart.tdr.write(|w| w.tdr().bits(u16::from(byte)));
 
         txs.pos += 1;
         if txs.pos == txs.len {
@@ -234,3 +229,5 @@ fn step_transmit(
         end_transmission(usart, tx).reply_fail(ResponseCode::BadArg);
     }
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

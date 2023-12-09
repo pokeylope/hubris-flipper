@@ -25,6 +25,9 @@ pub use vsc_err::VscError;
 
 use crate::dev::Dev10g;
 
+/// Maximum port count
+pub const PORT_COUNT: usize = 53;
+
 /// This trait abstracts over various ways of talking to a VSC7448.
 pub trait Vsc7448Rw {
     /// Writes to a VSC7448 register.  Depending on the underlying transit
@@ -105,6 +108,8 @@ pub trait Vsc7448Rw {
 /// Top-level state wrapper for a VSC7448 chip.
 pub struct Vsc7448<'a, R> {
     pub rw: &'a mut R,
+    refclk_1: RefClockFreq,
+    refclk_2: Option<RefClockFreq>,
 }
 
 impl<R: Vsc7448Rw> Vsc7448Rw for Vsc7448<'_, R> {
@@ -130,8 +135,20 @@ impl<R: Vsc7448Rw> Vsc7448Rw for Vsc7448<'_, R> {
 }
 
 impl<'a, R: Vsc7448Rw> Vsc7448<'a, R> {
-    pub fn new(rw: &'a mut R) -> Self {
-        Self { rw }
+    /// Simple constructor which wraps a `Vsc7448Rw` reference
+    ///
+    /// Also takes the REFCLK frequency, as well as an optional frequency for
+    /// REFCLK2 (used to configure the PLL boost).
+    pub fn new(
+        rw: &'a mut R,
+        refclk_1: RefClockFreq,
+        refclk_2: Option<RefClockFreq>,
+    ) -> Self {
+        Self {
+            rw,
+            refclk_1,
+            refclk_2,
+        }
     }
 
     /// Configures all ports in the system from a single `PortMap`
@@ -360,14 +377,7 @@ impl<'a, R: Vsc7448Rw> Vsc7448<'a, R> {
     /// Performs initial configuration (endianness, soft reset, read padding) of
     /// the VSC7448, checks that its chip ID is correct, and brings core systems
     /// out of reset.
-    ///
-    /// Takes the REFCLK frequency, as well as an optional frequency for
-    /// REFCLK2 (used to configure the PLL boost).
-    pub fn init(
-        &self,
-        f1: RefClockFreq,
-        f2: Option<RefClockFreq>,
-    ) -> Result<(), VscError> {
+    pub fn init(&self) -> Result<(), VscError> {
         // Write the byte ordering / endianness configuration
         self.write(DEVCPU_ORG().DEVCPU_ORG().IF_CTRL(), 0x81818181.into())?;
 
@@ -444,8 +454,8 @@ impl<'a, R: Vsc7448Rw> Vsc7448<'a, R> {
 
         // Enable the 5G PLL boost on the main clock, and optionally on
         // the secondary clock (if present)
-        self.pll5g_setup(0, f1)?;
-        if let Some(f2) = f2 {
+        self.pll5g_setup(0, self.refclk_1)?;
+        if let Some(f2) = self.refclk_2 {
             self.pll5g_setup(1, f2)?;
         }
 
@@ -688,10 +698,8 @@ impl<'a, R: Vsc7448Rw> Vsc7448<'a, R> {
         Ok(())
     }
 
-    /// Implements the VLAN scheme described in RFD 250.
-    pub fn configure_vlan_strict(&self) -> Result<(), VscError> {
-        const UPLINK: u8 = 49; // DEV10G_0, uplink to the Tofino 2
-
+    /// Configures the VLANs to be enabled, but with no ports active
+    pub fn configure_vlan_none(&self) -> Result<(), VscError> {
         // Enable the VLAN
         self.write_with(ANA_L3().COMMON().VLAN_CTRL(), |r| r.set_vlan_ena(1))?;
 
@@ -701,15 +709,37 @@ impl<'a, R: Vsc7448Rw> Vsc7448<'a, R> {
         for vid in [0, 1, 4095] {
             self.write_port_mask(ANA_L3().VLAN(vid).VLAN_MASK_CFG(), 0)?;
         }
+        Ok(())
+    }
+
+    /// Configures VLANs for a production-style system.
+    ///
+    /// For details, see RFD 250, but in brief:
+    ///
+    /// - VLANs in the form 0x1YY are configured for each downstream port.
+    ///   Ports active on a given VLAN are selected by the given function `f`;
+    ///   typically, each VLAN will contain a downstream port and the uplink
+    ///   port.
+    /// - Downstream ports send and receive untagged frames, and apply their
+    ///   VLAN tag on packet ingress.
+    /// - The uplink port (49) sends and receives packets with one VLAN tag, and
+    ///   uses that packet to select which VLAN (i.e. which downstream port)
+    ///   should receive that packet.  The VLAN tag is stripped on egress.
+    fn configure_vlan_with_mask(
+        &self,
+        f: fn(u8) -> u64,
+    ) -> Result<(), VscError> {
+        const UPLINK: u8 = 49; // DEV10G_0, uplink to the Tofino 2
 
         // Configure the downstream ports, which each have their own VLANs
         for p in (0..=52).filter(|p| *p != UPLINK) {
             let port = ANA_CL().PORT(p);
 
-            // Configure the 0x1YY VLAN for this port
+            // Configure the 0x1YY VLAN for this port, using our closure to
+            // decide what mask to apply
             self.write_port_mask(
                 ANA_L3().VLAN(0x100 + p as u16).VLAN_MASK_CFG(),
-                (1 << p) | (1 << UPLINK),
+                f(p),
             )?;
 
             // The downstream ports expect untagged frames, and classify
@@ -734,10 +764,14 @@ impl<'a, R: Vsc7448Rw> Vsc7448<'a, R> {
             r.set_vlan_pop_cnt(1);
             r.set_vlan_aware_ena(1);
         })?;
-        // Only accept 0x8100 as a valid TPID, to keep things simple,
-        // and only route frames with one accepted tag
         self.modify(port.VLAN_TPID_CTRL(), |r| {
+            // Only accept 0x8100 as a valid TPID, to keep things simple. This
+            // is the designated EtherType for "Customer VLAN tag" in IEEE
+            // 802.1Q; the register's polarity requires us to **clear** bit 0 to
+            // accept this TPID.
             r.set_basic_tpid_aware_dis(0b1110);
+
+            // Only route frames with one accepted tag
             r.set_rt_tag_ctrl(0b0010);
         })?;
         // Discard frames with < 1 tag
@@ -761,6 +795,44 @@ impl<'a, R: Vsc7448Rw> Vsc7448<'a, R> {
         )?;
 
         Ok(())
+    }
+
+    /// Implements the VLAN scheme described in RFD 250.
+    pub fn configure_vlan_strict(&self) -> Result<(), VscError> {
+        const UPLINK: u8 = 49; // DEV10G_0, uplink to the Tofino 2
+        self.configure_vlan_with_mask(|p| (1 << p) | (1 << UPLINK))
+    }
+
+    /// Implements the VLAN scheme described in RFD 250, with one exception:
+    /// the technician ports are on **every VLAN**, so they can talk to any SP
+    /// without having to go through the CPU port to the Tofino.
+    pub fn configure_vlan_semistrict(&self) -> Result<(), VscError> {
+        const UPLINK: u8 = 49; // DEV10G_0, uplink to the Tofino 2
+        const TECHNICIAN_1: u8 = 44;
+        const TECHNICIAN_2: u8 = 45;
+        self.configure_vlan_with_mask(|p| {
+            if p == TECHNICIAN_1 {
+                // Technician ports are connected to every port, but not to each
+                // other (to prevent spanning tree fun)
+                ((1 << 53) - 1) & !(1 << TECHNICIAN_2)
+            } else if p == TECHNICIAN_2 {
+                ((1 << 53) - 1) & !(1 << TECHNICIAN_1)
+            } else {
+                // SPs are only connected to the Tofino and technician ports
+                (1 << p)
+                    | (1 << UPLINK)
+                    | (1 << TECHNICIAN_1)
+                    | (1 << TECHNICIAN_2)
+            }
+        })
+    }
+
+    /// Checks the 10GBASE-KR autonegotiation state machine for the given dev.
+    ///
+    /// If it is stuck in `WAIT_RATE_DONE`, restarts autonegotiation and returns
+    /// `Ok(true)`, otherwise returns `Ok(false)`.
+    pub fn check_10gbase_kr_aneg(&self, dev: u8) -> Result<bool, VscError> {
+        Dev10g::new(dev)?.check_10gbase_kr_aneg(self)
     }
 }
 

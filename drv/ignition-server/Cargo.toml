@@ -1,0 +1,33 @@
+[package]
+name = "drv-ignition-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cfg-if = { workspace = true }
+idol-runtime = { workspace = true }
+num-traits = { workspace = true }
+zerocopy = { workspace = true }
+
+drv-fpga-api = { path = "../fpga-api" }
+drv-ignition-api = { path = "../ignition-api" }
+drv-sidecar-mainboard-controller = { path = "../../drv/sidecar-mainboard-controller" }
+drv-sidecar-seq-api = { path = "../sidecar-seq-api", optional = true }
+ringbuf = { path = "../../lib/ringbuf" }
+userlib = { path = "../../sys/userlib", features = ["panic-messages"] }
+
+[features]
+sequencer = ["dep:drv-sidecar-seq-api"]
+always-transmit = []
+
+[build-dependencies]
+build-util = {path = "../../build/util"}
+idol = { workspace = true }
+
+# This section is here to discourage RLS/rust-analyzer from doing test builds,
+# since test builds don't work for cross compilation.
+[[bin]]
+name = "drv-ignition-server"
+test = false
+doctest = false
+bench = false

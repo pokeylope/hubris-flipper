@@ -4,12 +4,21 @@
 
 use core::cell::Cell;
 
-use crate::{CurrentSensor, TempSensor, Validate, VoltageSensor};
+use crate::{
+    pmbus_validate, BadValidation, CurrentSensor, TempSensor, Validate,
+    VoltageSensor,
+};
 use drv_i2c_api::*;
 use pmbus::commands::raa229618::*;
 use pmbus::commands::CommandCode;
 use pmbus::*;
 use userlib::units::*;
+
+//
+// This is a special rail value that is issued as a PAGE command to enable
+// reading phase current via PHASE + PHASE_CURRENT
+//
+const PHASE_RAIL: u8 = 0x80;
 
 pub struct Raa229618 {
     device: I2cDevice,
@@ -23,13 +32,22 @@ impl core::fmt::Display for Raa229618 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Error {
     BadRead { cmd: u8, code: ResponseCode },
     BadWrite { cmd: u8, code: ResponseCode },
     BadData { cmd: u8 },
     BadValidation { cmd: u8, code: ResponseCode },
     InvalidData { err: pmbus::Error },
+}
+
+impl From<BadValidation> for Error {
+    fn from(value: BadValidation) -> Self {
+        Self::BadValidation {
+            cmd: value.cmd,
+            code: value.code,
+        }
+    }
 }
 
 impl From<Error> for ResponseCode {
@@ -58,10 +76,14 @@ impl Raa229618 {
         }
     }
 
-    fn read_mode(&self) -> Result<pmbus::VOutModeCommandData, Error> {
+    pub fn read_mode(&self) -> Result<pmbus::VOutModeCommandData, Error> {
         Ok(match self.mode.get() {
             None => {
-                let mode = pmbus_read!(self.device, commands::VOUT_MODE)?;
+                let mode = pmbus_rail_read!(
+                    self.device,
+                    self.rail,
+                    commands::VOUT_MODE
+                )?;
                 self.mode.set(Some(mode));
                 mode
             }
@@ -69,23 +91,16 @@ impl Raa229618 {
         })
     }
 
-    fn set_rail(&self) -> Result<(), Error> {
-        let page = PAGE::CommandData(self.rail);
-        pmbus_write!(self.device, PAGE, page)
-    }
-
     pub fn turn_off(&mut self) -> Result<(), Error> {
-        self.set_rail()?;
-        let mut operation = pmbus_read!(self.device, OPERATION)?;
-        operation.set_on_off_state(OPERATION::OnOffState::Off);
-        pmbus_write!(self.device, OPERATION, operation)
+        let mut op = pmbus_rail_read!(self.device, self.rail, OPERATION)?;
+        op.set_on_off_state(OPERATION::OnOffState::Off);
+        pmbus_rail_write!(self.device, self.rail, OPERATION, op)
     }
 
     pub fn turn_on(&mut self) -> Result<(), Error> {
-        self.set_rail()?;
-        let mut operation = pmbus_read!(self.device, OPERATION)?;
-        operation.set_on_off_state(OPERATION::OnOffState::On);
-        pmbus_write!(self.device, OPERATION, operation)
+        let mut op = pmbus_rail_read!(self.device, self.rail, OPERATION)?;
+        op.set_on_off_state(OPERATION::OnOffState::On);
+        pmbus_rail_write!(self.device, self.rail, OPERATION, op)
     }
 
     pub fn set_vout(&mut self, value: Volts) -> Result<(), Error> {
@@ -94,41 +109,52 @@ impl Raa229618 {
                 err: pmbus::Error::ValueOutOfRange,
             })
         } else {
-            self.set_rail()?;
             let mut vout = VOUT_COMMAND::CommandData(0);
             vout.set(self.read_mode()?, pmbus::units::Volts(value.0))?;
-            pmbus_write!(self.device, VOUT_COMMAND, vout)
+            pmbus_rail_write!(self.device, self.rail, VOUT_COMMAND, vout)
         }
+    }
+
+    pub fn read_phase_current(&self, phase: Phase) -> Result<Amperes, Error> {
+        let iout = pmbus_rail_phase_read!(
+            self.device,
+            PHASE_RAIL,
+            phase.0,
+            PHASE_CURRENT
+        )?;
+        Ok(Amperes(iout.get()?.0))
+    }
+
+    pub fn i2c_device(&self) -> &I2cDevice {
+        &self.device
     }
 }
 
 impl Validate<Error> for Raa229618 {
     fn validate(device: &I2cDevice) -> Result<bool, Error> {
-        let expected = [0x00, 0x99, 0xd2, 0x49];
-        pmbus_validate!(device, IC_DEVICE_ID, expected)
+        let expected = &[0x00, 0x99, 0xd2, 0x49];
+        pmbus_validate(device, CommandCode::IC_DEVICE_ID, expected)
+            .map_err(Into::into)
     }
 }
 
 impl VoltageSensor<Error> for Raa229618 {
     fn read_vout(&self) -> Result<Volts, Error> {
-        self.set_rail()?;
-        let vout = pmbus_read!(self.device, READ_VOUT)?;
+        let vout = pmbus_rail_read!(self.device, self.rail, READ_VOUT)?;
         Ok(Volts(vout.get(self.read_mode()?)?.0))
     }
 }
 
 impl TempSensor<Error> for Raa229618 {
     fn read_temperature(&self) -> Result<Celsius, Error> {
-        self.set_rail()?;
-        let temp = pmbus_read!(self.device, READ_TEMPERATURE_1)?;
-        Ok(Celsius(temp.get()?.0))
+        let t = pmbus_rail_read!(self.device, self.rail, READ_TEMPERATURE_1)?;
+        Ok(Celsius(t.get()?.0))
     }
 }
 
 impl CurrentSensor<Error> for Raa229618 {
     fn read_iout(&self) -> Result<Amperes, Error> {
-        self.set_rail()?;
-        let iout = pmbus_read!(self.device, READ_IOUT)?;
+        let iout = pmbus_rail_read!(self.device, self.rail, READ_IOUT)?;
         Ok(Amperes(iout.get()?.0))
     }
 }

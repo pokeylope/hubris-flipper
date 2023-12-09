@@ -1,19 +1,28 @@
 [package]
 name = "drv-spi-api"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-derive-idol-err = {path = "../../lib/derive-idol-err" }
-userlib = {path = "../../sys/userlib"}
-num-traits = { version = "0.2.12", default-features = false }
-zerocopy = "0.6.1"
+gateway-messages.workspace = true
+hubpack.workspace = true
+idol-runtime.workspace = true
+num-traits.workspace = true
+serde.workspace = true
+zerocopy.workspace = true
+
+derive-idol-err.path = "../../lib/derive-idol-err"
+userlib.path = "../../sys/userlib"
 
 # This section is here to discourage RLS/rust-analyzer from doing test builds,
 # since test builds don't work for cross compilation.
 [lib]
 test = false
+doctest = false
 bench = false
 
 [build-dependencies]
-idol = {git = "https://github.com/oxidecomputer/idolatry.git"}
+anyhow.workspace = true
+idol.workspace = true
+build-spi.path = "../../build/spi"
+build-util.path = "../../build/util"

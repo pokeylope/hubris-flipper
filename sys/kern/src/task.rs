@@ -5,14 +5,18 @@
 //! Implementation of tasks.
 
 use core::convert::TryFrom;
+use core::ops::Range;
 
 use abi::{
-    FaultInfo, FaultSource, Generation, Priority, RegionAttributes, RegionDesc,
-    ReplyFaultReason, SchedState, TaskDesc, TaskFlags, TaskId, TaskState,
-    ULease, UsageError,
+    FaultInfo, FaultSource, Generation, ReplyFaultReason, SchedState, TaskId,
+    TaskState, ULease, UsageError,
 };
 use zerocopy::FromBytes;
 
+use crate::descs::{
+    Priority, RegionAttributes, RegionDesc, TaskDesc, TaskFlags,
+    REGIONS_PER_TASK,
+};
 use crate::err::UserError;
 use crate::startup::HUBRIS_FAULT_NOTIFICATION;
 use crate::time::Timestamp;
@@ -40,9 +44,6 @@ pub struct Task {
     /// the task. The low bits of this become the task's generation number.
     generation: u32,
 
-    /// Static table defining this task's memory regions.
-    region_table: &'static [&'static RegionDesc],
-
     /// Notification status.
     notifications: u32,
 
@@ -54,12 +55,9 @@ pub struct Task {
 impl Task {
     /// Creates a `Task` in its initial state, filling in fields from
     /// `descriptor`.
-    pub fn from_descriptor(
-        descriptor: &'static TaskDesc,
-        region_table: &'static [&'static RegionDesc],
-    ) -> Self {
+    pub fn from_descriptor(descriptor: &'static TaskDesc) -> Self {
         Task {
-            priority: abi::Priority(descriptor.priority),
+            priority: Priority(descriptor.priority),
             state: if descriptor.flags.contains(TaskFlags::START_AT_BOOT) {
                 TaskState::Healthy(SchedState::Runnable)
             } else {
@@ -67,7 +65,6 @@ impl Task {
             },
 
             descriptor,
-            region_table,
 
             generation: 0,
             notifications: 0,
@@ -79,13 +76,13 @@ impl Task {
     /// Tests whether this task has read access to `slice` as normal memory.
     /// This is used to validate kernel accessses to the memory.
     ///
-    /// This is shorthand for `can_access(slice, RegionAttributes::READ)`.
+    /// This is shorthand for `can_access(slice, READ, DMA)`.
     ///
     /// This function is `must_use` because calling it without checking its
     /// return value is incredibly suspicious.
     #[must_use]
     fn can_read<T>(&self, slice: &USlice<T>) -> bool {
-        self.can_access(slice, RegionAttributes::READ)
+        self.can_access(slice, RegionAttributes::READ, RegionAttributes::DMA)
     }
 
     /// Obtains access to the memory backing `slice` as a Rust slice, assuming
@@ -114,16 +111,52 @@ impl Task {
         }
     }
 
+    /// Obtains access to the memory backing `slice` as a Rust raw pointer
+    /// range, if and only if the task `self` can access it for read. This is
+    /// used to access task memory from the kernel in validated form.
+    ///
+    /// Because the result of this function is not a Rust slice, this can be
+    /// used to interact with memory marked as `DMA` -- that is, normal memory
+    /// that might be asynchronously modified (from the perspective of the CPU).
+    /// If you want to access memory using a proper Rust slice, use `try_read`
+    /// instead.
+    ///
+    /// Like `try_read` this will treat memory marked `DEVICE` as inaccessible;
+    /// see `can_access` for more details.
+    pub fn try_read_dma<'a, T>(
+        &'a self,
+        slice: &'a USlice<T>,
+    ) -> Result<Range<*const T>, FaultInfo>
+    where
+        T: FromBytes,
+    {
+        if self.can_access(
+            slice,
+            RegionAttributes::READ,
+            RegionAttributes::empty(),
+        ) {
+            // Safety: assume_readable_raw requires us to have validated that
+            // the slice refers to normal task memory, which we did on the
+            // previous line.
+            unsafe { Ok(slice.assume_readable_raw()) }
+        } else {
+            Err(FaultInfo::MemoryAccess {
+                address: Some(slice.base_addr() as u32),
+                source: FaultSource::Kernel,
+            })
+        }
+    }
+
     /// Tests whether this task has write access to `slice` as normal memory.
     /// This is used to validate kernel accessses to the memory.
     ///
-    /// This is shorthand for `can_access(slice, RegionAttributes::WRITE)`.
+    /// This is shorthand for `can_access(slice, WRITE, DMA)`.
     ///
     /// This function is `must_use` because calling it without checking its
     /// return value is incredibly suspicious.
     #[must_use]
     fn can_write<T>(&self, slice: &USlice<T>) -> bool {
-        self.can_access(slice, RegionAttributes::WRITE)
+        self.can_access(slice, RegionAttributes::WRITE, RegionAttributes::DMA)
     }
 
     /// Obtains access to the memory backing `slice` as a Rust slice, assuming
@@ -153,25 +186,33 @@ impl Task {
     }
 
     /// Tests whether this task has access to `slice` as normal memory with
-    /// *all* of the given access attributes, and none of the forbidden
+    /// *all* of the given `desired` attributes, and none of the `forbidden`
     /// attributes. This is used to validate kernel accesses to the memory.
     ///
-    /// This will refuse access to any memory marked as DEVICE or DMA. This is a
-    /// big hammer, as a lot of tasks will probably want to lend memory that is
-    /// DMA-capable, and this will block that. It is potentially fixable with
-    /// more work. See issue #171.
+    /// In addition to the `forbidden` attributes passed by the caller, this
+    /// will also refuse to access memory marked as `DEVICE`, because such
+    /// accesses may be side effecting.
     ///
-    /// You could call this with `atts` as `RegionAttributes::empty()`; this
-    /// would just check that memory is not device or available for DMA, and is
-    /// a weird thing to do.  A normal call would pass something like
-    /// `RegionAttributes::READ`.
+    /// Most uses of this function also forbid `DMA`, because it is not sound to
+    /// create Rust references into `DMA` memory. Access to `DMA` memory is
+    /// possible but must use raw pointers and tolerate potential races. (Task
+    /// dumps are one of the only cases where this really makes sense.)
+    ///
+    /// You could call this with `desired` as `RegionAttributes::empty()`; this
+    /// would just check that memory is not device, and is a weird thing to do.
+    /// A normal call would pass something like `RegionAttributes::READ`.
     ///
     /// Note that all tasks can "access" any empty slice.
     ///
     /// This function is `must_use` because calling it without checking its
     /// return value is incredibly suspicious.
     #[must_use]
-    fn can_access<T>(&self, slice: &USlice<T>, atts: RegionAttributes) -> bool {
+    fn can_access<T>(
+        &self,
+        slice: &USlice<T>,
+        desired: RegionAttributes,
+        forbidden: RegionAttributes,
+    ) -> bool {
         if slice.is_empty() {
             // We deliberately omit tests for empty slices, as they confer no
             // authority as far as the kernel is concerned. This is pretty
@@ -180,11 +221,11 @@ impl Task {
             // according to the task's region map... but fine with us.
             return true;
         }
-        self.region_table.iter().any(|region| {
-            region_covers(region, slice)
-                && region.attributes.contains(atts)
-                && !region.attributes.contains(RegionAttributes::DEVICE)
-                && !region.attributes.contains(RegionAttributes::DMA)
+        let forbidden = forbidden | RegionAttributes::DEVICE;
+        self.region_table().iter().any(|region| {
+            region.covers(slice)
+                && region.attributes.contains(desired)
+                && !region.attributes.intersects(forbidden)
         })
     }
 
@@ -293,8 +334,8 @@ impl Task {
     }
 
     /// Returns a reference to the task's memory region descriptor table.
-    pub fn region_table(&self) -> &'static [&'static RegionDesc] {
-        self.region_table
+    pub fn region_table(&self) -> &[&'static RegionDesc; REGIONS_PER_TASK] {
+        &self.descriptor.regions
     }
 
     /// Returns this task's current generation number.
@@ -857,14 +898,4 @@ pub fn force_fault(
 /// `tasks[index]`.
 pub fn current_id(tasks: &[Task], index: usize) -> TaskId {
     TaskId::for_index_and_gen(index, tasks[index].generation())
-}
-
-/// Tests whether `slice` is fully enclosed by `region`.
-fn region_covers<T>(region: &abi::RegionDesc, slice: &USlice<T>) -> bool {
-    // We don't allow regions to butt up against the end of the address space,
-    // so we can compute our off-by-one end address as follows:
-    let region_end = region.base.wrapping_add(region.size) as usize;
-
-    (region.base as usize) <= slice.base_addr()
-        && slice.end_addr() <= region_end
 }

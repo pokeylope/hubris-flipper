@@ -26,7 +26,6 @@
 
 #![no_std]
 #![feature(asm_const)]
-#![feature(asm_sym)]
 #![feature(naked_functions)]
 
 #[macro_use]
@@ -44,7 +43,6 @@ pub mod hl;
 pub mod kipc;
 pub mod task_slot;
 pub mod units;
-pub mod util;
 
 #[derive(Debug)]
 #[repr(transparent)]

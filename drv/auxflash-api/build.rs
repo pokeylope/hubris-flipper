@@ -5,7 +5,7 @@
 use serde::Deserialize;
 use std::io::Write;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let global_config = build_util::config::<GlobalConfig>()?;
     generate_auxflash_config(&global_config.auxflash)?;
 
@@ -33,11 +33,11 @@ struct AuxFlashConfig {
 
 fn generate_auxflash_config(
     config: &AuxFlashConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let out_dir = std::env::var("OUT_DIR")?;
-    let dest_path = std::path::Path::new(&out_dir).join("auxflash_config.rs");
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let out_dir = build_util::out_dir();
+    let dest_path = out_dir.join("auxflash_config.rs");
 
-    let mut out = std::fs::File::create(&dest_path)?;
+    let mut out = std::fs::File::create(dest_path)?;
 
     // Check that the config is reasonable:
     // a. We have at least 6 slots (see RFD 311)

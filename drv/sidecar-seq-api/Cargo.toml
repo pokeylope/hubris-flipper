@@ -4,12 +4,22 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-derive-idol-err = {path = "../../lib/derive-idol-err" }
-userlib = {path = "../../sys/userlib"}
-num-traits = { version = "0.2.12", default-features = false }
-zerocopy = "0.6.1"
-drv-fpga-api = {path = "../fpga-api"}
-drv-sidecar-mainboard-controller = {path = "../sidecar-mainboard-controller"}
+idol-runtime.workspace = true
+hubpack.workspace = true
+num-traits.workspace = true
+serde.workspace = true
+zerocopy.workspace = true
+
+derive-idol-err = { path = "../../lib/derive-idol-err"  }
+drv-fpga-api = { path = "../fpga-api" }
+drv-fpga-user-api = { path = "../fpga-user-api" }
+drv-sidecar-mainboard-controller = { path = "../sidecar-mainboard-controller" }
+userlib = { path = "../../sys/userlib" }
 
 [build-dependencies]
-idol = {git = "https://github.com/oxidecomputer/idolatry.git"}
+idol.workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

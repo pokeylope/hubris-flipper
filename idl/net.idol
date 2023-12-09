@@ -4,7 +4,7 @@ Interface(
     name: "Net",
     ops: {
         "recv_packet": (
-            encoding: Ssmarshal,
+            encoding: Hubpack,
             doc: "Unqueues an incoming packet from a socket.",
             args: {
                 "socket": "SocketName",
@@ -19,7 +19,7 @@ Interface(
             ),
         ),
         "send_packet": (
-            encoding: Ssmarshal,
+            encoding: Hubpack,
             doc: "Queues an outgoing packet into a socket.",
             args: {
                 "socket": "SocketName",
@@ -45,7 +45,7 @@ Interface(
             ),
         ),
         "smi_write": (
-            doc: "Reads a register from a SMI-attached device.",
+            doc: "Writes a register in a SMI-attached device.",
             args: {
                 "phy": "u8",
                 "register": "u8",
@@ -110,10 +110,13 @@ Interface(
         ),
         "get_mac_address": (
             doc: "Reports the MAC address of port 0",
-            reply: Result(
-                ok: "MacAddress",
-                err: ServerDeath,
-            ),
+            reply: Simple("MacAddress"),
+            idempotent: true,
+        ),
+        "get_spare_mac_addresses": (
+            doc: "Reports any remaining MAC addresses after the net task has claimed its own",
+            reply: Simple("MacAddressBlock"),
+            idempotent: true,
         ),
         "management_link_status": (
             doc: "Checks the client side management network status",
@@ -121,7 +124,7 @@ Interface(
                 ok: "ManagementLinkStatus",
                 err: CLike("MgmtError")
             ),
-            encoding: Ssmarshal,
+            encoding: Hubpack,
         ),
         "management_counters": (
             doc: "Returns management network counters",
@@ -129,7 +132,7 @@ Interface(
                 ok: "ManagementCounters",
                 err: CLike("MgmtError")
             ),
-            encoding: Ssmarshal,
+            encoding: Hubpack,
         ),
     },
 )

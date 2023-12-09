@@ -144,12 +144,12 @@ impl TxRing {
         // ensure that they're owned by us (not the hardware).
         for desc in storage {
             #[cfg(not(feature = "vlan"))]
-            desc.tdes[3].store(0, Ordering::Release);
+            desc.tdes[3].store(0, Ordering::Relaxed);
 
             #[cfg(feature = "vlan")]
             {
-                desc.tdes[0][3].store(0, Ordering::Release);
-                desc.tdes[1][3].store(0, Ordering::Release);
+                desc.tdes[0][3].store(0, Ordering::Relaxed);
+                desc.tdes[1][3].store(0, Ordering::Relaxed);
             }
         }
         Self {
@@ -165,12 +165,16 @@ impl TxRing {
         self.storage.as_ptr()
     }
 
-    /// Returns a pointer to the byte just past the end of the `TxDesc` ring.
-    /// This too gets loaded into the DMA controller, so that it knows what
-    /// section of the ring is initialized and can be read. (The answer is "all
-    /// of it.")
-    pub fn tail_ptr(&self) -> *const TxDesc {
-        self.storage.as_ptr_range().end
+    /// Returns a pointer to the "next" descriptor in the ring.  We load this
+    /// into the device so that the DMA engine knows what descriptors are free.
+    pub fn next_tail_ptr(&self) -> *const TxDesc {
+        self.base_ptr().wrapping_add(self.next.get())
+    }
+
+    /// Increments the `next` descriptor index, modulo the length of the ring.
+    fn incr_next(&self) {
+        let next = self.next.get() + 1;
+        self.next.set(next % self.storage.len());
     }
 }
 
@@ -235,10 +239,10 @@ impl TxRing {
 
             let result = body(buffer);
 
-            // Program the descriptor to represent the packet. We program
-            // carefully to ensure that the memory accesses happen in the right
-            // order: the entire descriptor must be written before the OWN bit
-            // is set in TDES3 using a RELEASE store.
+            // Program the descriptor to represent the packet. We use relaxed
+            // memory ordering here as we currently own the descriptor, and
+            // a memory barrier will be performed before we update the tail
+            // pointer register to transfer descriptor ownership to the device.
             d.tdes[0].store(buffer.as_ptr() as u32, Ordering::Relaxed);
             d.tdes[1].store(0, Ordering::Relaxed);
             d.tdes[2].store(len as u32, Ordering::Relaxed);
@@ -247,13 +251,9 @@ impl TxRing {
                 | 1 << TDES3_LD_BIT
                 | TDES3_CIC_CHECKSUMS_ENABLED << TDES3_CIC_BIT
                 | len as u32;
-            d.tdes[3].store(tdes3, Ordering::Release); // <-- release
+            d.tdes[3].store(tdes3, Ordering::Relaxed);
 
-            self.next.set(if self.next.get() + 1 == self.storage.len() {
-                0
-            } else {
-                self.next.get() + 1
-            });
+            self.incr_next();
 
             Some(result)
         }
@@ -315,14 +315,14 @@ impl TxRing {
             let result = body(buffer);
 
             // Program the context descriptor to configure the VLAN tag. We
-            // program carefully to ensure that the memory accesses happen
-            // in the right order: the entire descriptor must be written before
-            // the OWN bit is set in TDES3 using a RELEASE store.
+            // use relaxed ordering here because we own the descriptor, and the
+            // code that transfers descriptor ownership to the device must
+            // perform a barrier before doing so.
             let tdes3 = 1 << TDES3_OWN_BIT
                 | 1 << TDES3_CTXT_BIT
                 | 1 << TDES3_VLTV_BIT
                 | u32::from(vid);
-            d.tdes[0][3].store(tdes3, Ordering::Release); // <-- release
+            d.tdes[0][3].store(tdes3, Ordering::Relaxed);
 
             // Program the tx descriptor to represent the packet, using the
             // same strategy as above for memory access ordering.
@@ -335,13 +335,9 @@ impl TxRing {
                 | 1 << TDES3_LD_BIT
                 | TDES3_CIC_CHECKSUMS_ENABLED << TDES3_CIC_BIT
                 | len as u32;
-            d.tdes[1][3].store(tdes3, Ordering::Release); // <-- release
+            d.tdes[1][3].store(tdes3, Ordering::Relaxed);
 
-            self.next.set(if self.next.get() + 1 == self.storage.len() {
-                0
-            } else {
-                self.next.get() + 1
-            });
+            self.incr_next();
 
             Some(result)
         }
@@ -448,12 +444,18 @@ impl RxRing {
         self.storage.as_ptr()
     }
 
-    /// Returns a pointer to the byte just past the end of the `RxDesc` ring.
-    /// This too gets loaded into the DMA controller, so that it knows what
-    /// section of the ring is initialized and can be read. (The answer is "all
-    /// of it.")
-    pub fn tail_ptr(&self) -> *const RxDesc {
-        self.storage.as_ptr_range().end
+    /// Returns a pointer to the last valid descriptor in the ring.
+    /// We load this into the DMA controller when we first start operation so
+    /// that it knows what section of the ring is initialized and can be read.
+    /// The answer is "all of it," but we can't exactly specify that.
+    pub fn first_tail_ptr(&self) -> *const RxDesc {
+        self.base_ptr().wrapping_add(self.len() - 1)
+    }
+
+    /// Returns a pointer to the "next" descriptor in the ring.  We load this
+    /// into the device so that the DMA engine knows what descriptors are free.
+    pub fn next_tail_ptr(&self) -> *const RxDesc {
+        self.base_ptr().wrapping_add(self.next.get())
     }
 
     /// Returns the count of entries in the descriptor ring / buffers in the
@@ -462,16 +464,24 @@ impl RxRing {
         self.storage.len()
     }
 
+    /// Increments the `next` descriptor index, modulo the length of the ring.
+    fn incr_next(&self) {
+        let next = self.next.get() + 1;
+        self.next.set(next % self.storage.len());
+    }
+
     /// Programs the words in `d` to prepare to receive into `buffer` and sets
-    /// `d` accessible to hardware. The final write to make it accessible is
-    /// performed with Release ordering to get a barrier.
+    /// `d` accessible to hardware. We use relaxed ordering here, since we own
+    /// the descriptor currently and any code that writes to the tail pointer
+    /// register to transfer ownership to the device must first perform a
+    /// memory barrier.
     fn set_descriptor(d: &RxDesc, buffer: *mut [u8; BUFSZ]) {
         d.rdes[0].store(buffer as u32, Ordering::Relaxed);
         d.rdes[1].store(0, Ordering::Relaxed);
         d.rdes[2].store(0, Ordering::Relaxed);
         let rdes3 =
             1 << RDES3_OWN_BIT | 1 << RDES3_IOC_BIT | 1 << RDES3_BUF1_VALID_BIT;
-        d.rdes[3].store(rdes3, Ordering::Release); // <-- release
+        d.rdes[3].store(rdes3, Ordering::Relaxed);
     }
 }
 
@@ -507,11 +517,8 @@ impl RxRing {
             }
 
             // Otherwise, drop the packet by bumping our index
-            self.next.set(if self.next.get() + 1 == self.storage.len() {
-                0
-            } else {
-                self.next.get() + 1
-            });
+            self.incr_next();
+
             any_dropped = true;
         }
     }
@@ -582,11 +589,7 @@ impl RxRing {
         // potentially in use, and we must not access either.
 
         // Bump index forward.
-        self.next.set(if self.next.get() + 1 == self.storage.len() {
-            0
-        } else {
-            self.next.get() + 1
-        });
+        self.incr_next();
 
         result
     }
@@ -650,11 +653,8 @@ impl RxRing {
             Self::set_descriptor(d, buffer);
 
             // Bump index forward.
-            self.next.set(if self.next.get() + 1 == self.storage.len() {
-                0
-            } else {
-                self.next.get() + 1
-            });
+            self.incr_next();
+
             any_dropped = true;
         }
     }
@@ -720,11 +720,7 @@ impl RxRing {
         // potentially in use, and we must not access either.
 
         // Bump index forward.
-        self.next.set(if self.next.get() + 1 == self.storage.len() {
-            0
-        } else {
-            self.next.get() + 1
-        });
+        self.incr_next();
 
         retval
     }

@@ -73,22 +73,13 @@ pub enum Functions {
         ResponseCode,
     ),
     #[cfg(feature = "gpio")]
-    GpioInput(drv_stm32xx_sys_api::Port, drv_stm32xx_sys_api::GpioError),
+    GpioInput(drv_stm32xx_sys_api::Port, u32),
     #[cfg(feature = "gpio")]
-    GpioToggle(
-        (drv_stm32xx_sys_api::Port, u8),
-        drv_stm32xx_sys_api::GpioError,
-    ),
+    GpioToggle((drv_stm32xx_sys_api::Port, u8), u32),
     #[cfg(feature = "gpio")]
-    GpioSet(
-        (drv_stm32xx_sys_api::Port, u8),
-        drv_stm32xx_sys_api::GpioError,
-    ),
+    GpioSet((drv_stm32xx_sys_api::Port, u8), u32),
     #[cfg(feature = "gpio")]
-    GpioReset(
-        (drv_stm32xx_sys_api::Port, u8),
-        drv_stm32xx_sys_api::GpioError,
-    ),
+    GpioReset((drv_stm32xx_sys_api::Port, u8), u32),
     #[cfg(feature = "gpio")]
     GpioConfigure(
         (
@@ -100,7 +91,7 @@ pub enum Functions {
             drv_stm32xx_sys_api::Pull,
             drv_stm32xx_sys_api::Alternate,
         ),
-        drv_stm32xx_sys_api::GpioError,
+        u32,
     ),
     #[cfg(feature = "spi")]
     SpiRead((Task, u8, usize, usize), drv_spi_api::SpiError),
@@ -115,9 +106,13 @@ pub enum Functions {
     #[cfg(feature = "qspi")]
     QspiPageProgram((u32, usize, usize), drv_gimlet_hf_api::HfError),
     #[cfg(feature = "qspi")]
+    QspiPageProgramSector0((u32, usize, usize), drv_gimlet_hf_api::HfError),
+    #[cfg(feature = "qspi")]
     QspiRead((u32, usize), drv_gimlet_hf_api::HfError),
     #[cfg(feature = "qspi")]
     QspiSectorErase(u32, drv_gimlet_hf_api::HfError),
+    #[cfg(feature = "qspi")]
+    QspiSector0Erase((), drv_gimlet_hf_api::HfError),
     #[cfg(feature = "qspi")]
     QspiVerify((u32, usize, usize), drv_gimlet_hf_api::HfError),
     #[cfg(all(feature = "qspi", feature = "hash"))]
@@ -132,14 +127,6 @@ pub enum Functions {
     HashFinalize((), drv_hash_api::HashError),
     #[cfg(feature = "rng")]
     Rng(usize, drv_rng_api::RngError),
-    #[cfg(feature = "update")]
-    StartUpdate((), drv_update_api::UpdateError),
-    #[cfg(feature = "update")]
-    WriteBlock((usize, usize), drv_update_api::UpdateError),
-    #[cfg(feature = "update")]
-    FinishUpdate((), drv_update_api::UpdateError),
-    #[cfg(feature = "update")]
-    BlockSize((), drv_update_api::UpdateError),
 }
 
 #[cfg(feature = "i2c")]
@@ -227,7 +214,7 @@ fn i2c_read(
             }
 
             let res = if let Some(reg) = register {
-                device.read_reg_into::<u8>(reg as u8, &mut rval[0..n])
+                device.read_reg_into::<u8>(reg, &mut rval[0..n])
             } else {
                 device.read_into(&mut rval[0..n])
             };
@@ -244,7 +231,7 @@ fn i2c_read(
                     return Err(Failure::Fault(Fault::ReturnValueOverflow));
                 }
 
-                match device.read_block::<u8>(reg as u8, &mut rval[0..0xff]) {
+                match device.read_block::<u8>(reg, &mut rval[0..0xff]) {
                     Ok(rlen) => Ok(rlen),
                     Err(err) => Err(Failure::FunctionError(err.into())),
                 }
@@ -372,7 +359,7 @@ fn gpio_args(
     };
 
     let mask = match stack[fp + 1] {
-        Some(pin) if pin < 16 => (1u16 << pin),
+        Some(pin) if pin < 16 => 1u16 << pin,
         Some(_) => {
             return Err(Failure::Fault(Fault::BadParameter(1)));
         }
@@ -411,13 +398,10 @@ fn gpio_input(
 
     ringbuf_entry!(Trace::GpioInput(port));
 
-    match gpio.gpio_read_input(port) {
-        Ok(input) => {
-            byteorder::LittleEndian::write_u16(rval, input);
-            Ok(core::mem::size_of::<u16>())
-        }
-        Err(err) => Err(Failure::FunctionError(err.into())),
-    }
+    let input = gpio.gpio_read_input(port);
+
+    byteorder::LittleEndian::write_u16(rval, input);
+    Ok(core::mem::size_of::<u16>())
 }
 
 #[cfg(feature = "gpio")]
@@ -433,7 +417,7 @@ fn gpio_toggle(
 
     match gpio.gpio_toggle(port, mask) {
         Ok(_) => Ok(0),
-        Err(err) => Err(Failure::FunctionError(err.into())),
+        Err(idol_runtime::ServerDeath) => panic!(),
     }
 }
 
@@ -448,10 +432,9 @@ fn gpio_set(
 
     let (port, mask) = gpio_args(stack)?;
 
-    match gpio.gpio_set_reset(port, mask, 0) {
-        Ok(_) => Ok(0),
-        Err(err) => Err(Failure::FunctionError(err.into())),
-    }
+    gpio.gpio_set_reset(port, mask, 0);
+
+    Ok(0)
 }
 
 #[cfg(feature = "gpio")]
@@ -465,10 +448,9 @@ fn gpio_reset(
 
     let (port, mask) = gpio_args(stack)?;
 
-    match gpio.gpio_set_reset(port, 0, mask) {
-        Ok(_) => Ok(0),
-        Err(err) => Err(Failure::FunctionError(err.into())),
-    }
+    gpio.gpio_set_reset(port, 0, mask);
+
+    Ok(0)
 }
 
 #[cfg(feature = "gpio")]
@@ -534,10 +516,9 @@ fn gpio_configure(
         Trace::GpioConfigure(port, mask, mode, output_type, speed, pull, af)
     );
 
-    match gpio.gpio_configure(port, mask, mode, output_type, speed, pull, af) {
-        Ok(_) => Ok(0),
-        Err(err) => Err(Failure::FunctionError(err.into())),
-    }
+    gpio.gpio_configure(port, mask, mode, output_type, speed, pull, af);
+
+    Ok(0)
 }
 
 pub(crate) static HIFFY_FUNCS: &[Function] = &[
@@ -574,9 +555,13 @@ pub(crate) static HIFFY_FUNCS: &[Function] = &[
     #[cfg(feature = "qspi")]
     crate::common::qspi_page_program,
     #[cfg(feature = "qspi")]
+    crate::common::qspi_page_program_sector0,
+    #[cfg(feature = "qspi")]
     crate::common::qspi_read,
     #[cfg(feature = "qspi")]
     crate::common::qspi_sector_erase,
+    #[cfg(feature = "qspi")]
+    crate::common::qspi_sector0_erase,
     #[cfg(feature = "qspi")]
     crate::common::qspi_verify,
     #[cfg(all(feature = "qspi", feature = "hash"))]
@@ -591,14 +576,6 @@ pub(crate) static HIFFY_FUNCS: &[Function] = &[
     hash_finalize_sha256,
     #[cfg(feature = "rng")]
     crate::common::rng_fill,
-    #[cfg(feature = "update")]
-    crate::common::start_update,
-    #[cfg(feature = "update")]
-    crate::common::write_block,
-    #[cfg(feature = "update")]
-    crate::common::finish_update,
-    #[cfg(feature = "update")]
-    crate::common::block_size,
 ];
 
 //

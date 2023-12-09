@@ -7,8 +7,8 @@ stacksize = 944
 
 [kernel]
 name = "demo-stm32g0-nucleo"
-requires = {flash = 12000, ram = 2000}
-features = ["g070", "panic-halt"]
+requires = {flash = 18448, ram = 1632}
+features = ["g070"]
 stacksize = 640
 
 [tasks.jefe]
@@ -16,15 +16,15 @@ name = "task-jefe"
 priority = 0
 max-sizes = {flash = 4096, ram = 512}
 start = true
-features = ["log-null"]
 stacksize = 352
+notifications = ["fault", "timer"]
 
 [tasks.sys]
 name = "drv-stm32xx-sys"
 features = ["g070"]
 priority = 1
 max-sizes = {flash = 2048, ram = 256}
-uses = ["rcc", "gpio"]
+uses = ["rcc", "gpio", "system_flash"]
 start = true
 stacksize = 256
 task-slots = ["jefe"]
@@ -36,7 +36,8 @@ priority = 2
 max-sizes = {flash = 4096, ram = 256}
 uses = ["usart1"]
 start = true
-interrupts = {"usart1.irq" = 1}
+notifications = ["usart-irq"]
+interrupts = {"usart1.irq" = "usart-irq"}
 task-slots = ["sys"]
 stacksize = 256
 
@@ -48,6 +49,7 @@ max-sizes = {flash = 2048, ram = 256}
 start = true
 task-slots = ["sys"]
 stacksize = 256
+notifications = ["timer"]
 
 [tasks.pong]
 name = "task-pong"
@@ -55,6 +57,7 @@ priority = 3
 max-sizes = {flash = 1024, ram = 256}
 start = true
 task-slots = ["user_leds"]
+notifications = ["timer"]
 stacksize = 256
 
 [tasks.ping]

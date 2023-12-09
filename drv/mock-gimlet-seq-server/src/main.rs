@@ -85,10 +85,24 @@ impl idl::InOrderSequencerImpl for ServerImpl {
     ) -> Result<(), RequestError<SeqError>> {
         Ok(())
     }
+
+    fn send_hardware_nmi(
+        &mut self,
+        _: &RecvMessage,
+    ) -> Result<(), RequestError<core::convert::Infallible>> {
+        Ok(())
+    }
+
+    fn read_fpga_regs(
+        &mut self,
+        _: &RecvMessage,
+    ) -> Result<[u8; 64], RequestError<SeqError>> {
+        Ok([0; 64])
+    }
 }
 
 mod idl {
-    use super::{PowerState, SeqError};
+    use super::SeqError;
 
     include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
 }

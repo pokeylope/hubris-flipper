@@ -6,7 +6,10 @@
 
 use core::cell::Cell;
 
-use crate::{CurrentSensor, TempSensor, Validate, VoltageSensor};
+use crate::{
+    pmbus_validate, BadValidation, CurrentSensor, TempSensor, Validate,
+    VoltageSensor,
+};
 use drv_i2c_api::*;
 use pmbus::commands::*;
 use userlib::units::*;
@@ -23,6 +26,15 @@ pub enum Error {
     BadData { cmd: u8 },
     BadValidation { cmd: u8, code: ResponseCode },
     InvalidData { err: pmbus::Error },
+}
+
+impl From<BadValidation> for Error {
+    fn from(value: BadValidation) -> Self {
+        Self::BadValidation {
+            cmd: value.cmd,
+            code: value.code,
+        }
+    }
 }
 
 impl From<pmbus::Error> for Error {
@@ -50,7 +62,7 @@ impl Bmr491 {
         }
     }
 
-    fn read_mode(&self) -> Result<pmbus::VOutModeCommandData, Error> {
+    pub fn read_mode(&self) -> Result<pmbus::VOutModeCommandData, Error> {
         Ok(match self.mode.get() {
             None => {
                 let mode = pmbus_read!(self.device, VOUT_MODE)?;
@@ -65,12 +77,17 @@ impl Bmr491 {
         let vout = pmbus_read!(self.device, bmr491::READ_VOUT)?;
         Ok(Volts(vout.get(self.read_mode()?)?.0))
     }
+
+    pub fn i2c_device(&self) -> &I2cDevice {
+        &self.device
+    }
 }
 
 impl Validate<Error> for Bmr491 {
     fn validate(device: &I2cDevice) -> Result<bool, Error> {
-        let expected = [0x46, 0x6c, 0x65, 0x78];
-        pmbus_validate!(device, MFR_ID, expected)
+        let expected = b"Flex";
+        pmbus_validate(device, CommandCode::MFR_ID, expected)
+            .map_err(Into::into)
     }
 }
 

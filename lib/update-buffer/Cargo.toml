@@ -1,0 +1,7 @@
+[package]
+name = "update-buffer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+spin = { workspace = true }

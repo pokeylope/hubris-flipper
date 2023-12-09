@@ -10,7 +10,7 @@ use core::ops::Deref;
 
 use drv_spi_api::SpiError;
 use userlib::*;
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, BigEndian, FromBytes, U32};
 
 #[cfg(feature = "auxflash")]
 use drv_auxflash_api::{AuxFlash, AuxFlashBlob};
@@ -28,7 +28,12 @@ pub enum FpgaError {
     AuxChecksumMismatch,
     AuxReadError,
     AuxMissingBlob,
+    CommsError,
 }
+
+// TODO is this right? We cause clients to panic if we die; should we have a
+// `ServerRestarted` variant instead?
+impl idol_runtime::IHaveConsideredServerDeathWithThisErrorType for FpgaError {}
 
 impl From<FpgaError> for u16 {
     fn from(e: FpgaError) -> Self {
@@ -46,6 +51,7 @@ impl From<FpgaError> for u16 {
             FpgaError::AuxChecksumMismatch => 0x0503,
             FpgaError::AuxReadError => 0x0504,
             FpgaError::AuxMissingBlob => 0x0505,
+            FpgaError::CommsError => 0x0506,
         }
     }
 }
@@ -79,6 +85,7 @@ impl core::convert::TryFrom<u16> for FpgaError {
                 0x0503 => Ok(FpgaError::AuxChecksumMismatch),
                 0x0504 => Ok(FpgaError::AuxReadError),
                 0x0505 => Ok(FpgaError::AuxMissingBlob),
+                0x0506 => Ok(FpgaError::CommsError),
                 _ => Err(()),
             },
         }
@@ -226,6 +233,15 @@ impl Bitstream {
     }
 }
 
+#[derive(Copy, Clone, Debug, FromBytes, AsBytes)]
+#[repr(C, packed)]
+pub struct FpgaUserDesignIdent {
+    pub id: U32<BigEndian>,
+    pub checksum: U32<BigEndian>,
+    pub version: U32<BigEndian>,
+    pub sha: U32<BigEndian>,
+}
+
 pub struct FpgaUserDesign {
     server: idl::Fpga,
     device_index: u8,
@@ -252,19 +268,27 @@ impl FpgaUserDesign {
         self.server.reset_user_design(self.device_index)
     }
 
+    #[inline]
     pub fn read<T>(&self, addr: impl Into<u16>) -> Result<T, FpgaError>
     where
-        T: AsBytes + Default + FromBytes,
+        T: AsBytes + FromBytes,
     {
-        let mut v = T::default();
-        self.server.user_design_read(
-            self.device_index,
-            addr.into(),
-            v.as_bytes_mut(),
-        )?;
+        let mut v = T::new_zeroed();
+        self.read_bytes(addr, v.as_bytes_mut())?;
         Ok(v)
     }
 
+    #[inline]
+    pub fn read_bytes(
+        &self,
+        addr: impl Into<u16>,
+        data: &mut [u8],
+    ) -> Result<(), FpgaError> {
+        self.server
+            .user_design_read(self.device_index, addr.into(), data)
+    }
+
+    #[inline]
     pub fn write<T>(
         &self,
         op: WriteOp,
@@ -272,14 +296,20 @@ impl FpgaUserDesign {
         value: T,
     ) -> Result<(), FpgaError>
     where
-        T: AsBytes + FromBytes,
+        T: AsBytes,
     {
-        self.server.user_design_write(
-            self.device_index,
-            op,
-            addr.into(),
-            value.as_bytes(),
-        )
+        self.write_bytes(op, addr, value.as_bytes())
+    }
+
+    #[inline]
+    pub fn write_bytes(
+        &self,
+        op: WriteOp,
+        addr: impl Into<u16>,
+        data: &[u8],
+    ) -> Result<(), FpgaError> {
+        self.server
+            .user_design_write(self.device_index, op, addr.into(), data)
     }
 }
 

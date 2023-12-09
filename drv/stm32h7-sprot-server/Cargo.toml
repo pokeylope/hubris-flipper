@@ -1,0 +1,50 @@
+[package]
+name = "drv-stm32h7-sprot-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+attest-api = { path = "../../task/attest-api" }
+cfg-if.workspace = true
+hubpack.workspace = true
+idol-runtime.workspace = true
+num-traits.workspace = true
+serde.workspace = true
+ssmarshal.workspace = true
+zerocopy.workspace = true
+
+mutable-statics = { path = "../../lib/mutable-statics" }
+drv-spi-api = { path = "../../drv/spi-api" }
+drv-sprot-api = { path = "../../drv/sprot-api", features = ["sink_test"] }
+drv-stm32h7-spi-server-core = { path = "../../drv/stm32h7-spi-server-core", optional = true }
+drv-stm32xx-sys-api = { path = "../../drv/stm32xx-sys-api", features = ["family-stm32h7"] }
+drv-update-api = { path = "../../drv/update-api" }
+drv-lpc55-update-api = { path = "../../drv/lpc55-update-api" }
+drv-caboose = { path = "../../drv/caboose" }
+ringbuf = { path = "../../lib/ringbuf" }
+userlib = { path = "../../sys/userlib", features = ["panic-messages"] }
+
+[build-dependencies]
+build-util = { path = "../../build/util" }
+idol = { workspace = true }
+
+[features]
+sink_test = []
+use-spi-core = ["drv-stm32h7-spi-server-core"]
+h743 = ["drv-stm32h7-spi-server-core?/h743"]
+h753 = ["drv-stm32h7-spi-server-core?/h753"]
+
+spi1 = ["drv-stm32h7-spi-server-core?/spi1"]
+spi2 = ["drv-stm32h7-spi-server-core?/spi2"]
+spi3 = ["drv-stm32h7-spi-server-core?/spi3"]
+spi4 = ["drv-stm32h7-spi-server-core?/spi4"]
+spi5 = ["drv-stm32h7-spi-server-core?/spi5"]
+spi6 = ["drv-stm32h7-spi-server-core?/spi6"]
+
+# This section is here to discourage RLS/rust-analyzer from doing test builds,
+# since test builds don't work for cross compilation.
+[[bin]]
+name = "drv-stm32h7-sprot-server"
+test = false
+doctest = false
+bench = false

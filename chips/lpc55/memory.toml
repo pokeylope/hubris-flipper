@@ -19,6 +19,14 @@ size = 0x10000
 read = true
 execute = true
 
+[[flash]]
+name = "dice-mfg"
+address = 0x90000
+size = 0x800
+read = true
+write = false
+execute = false
+
 [[ram]]
 name = "a"
 address = 0x20004000
@@ -43,3 +51,93 @@ read = true
 write = true
 execute = false
 
+[[sram2]]
+name = "a"
+address = 0x20020000
+size = 0x10000
+read = true
+write = true
+execute = false
+dma = true
+
+[[sram2]]
+name = "b"
+address = 0x20020000
+size = 0x10000
+read = true
+write = true
+execute = false
+dma = true
+
+[[sram2]]
+name = "stage0"
+address = 0x20020000
+size = 0x10000
+read = true
+write = true
+execute = false
+dma = true
+
+# Info about the images loaded into flash and dumped by stage0 into USB SRAM
+# for hubris use.
+[[usbsram]]
+name = "a"
+address = 0x40102000
+size = 0x1000
+read = true
+write = false
+execute = false
+dma = true
+
+[[usbsram]]
+name = "b"
+address = 0x40102000
+size = 0x1000
+read = true
+write = false
+execute = false
+dma = true
+
+[[usbsram]]
+name = "stage0"
+address = 0x40102000
+size = 0x1000
+read = true
+write = false
+execute = false
+dma = true
+
+# RAM region used to hand common part of DICE certificate chain forward to
+# Hubris tasks
+[[dice_certs]]
+name = "a"
+address = 0x40100000
+size = 0xa00
+read = true
+write = false
+execute = false
+
+[[dice_certs]]
+name = "b"
+address = 0x40100000
+size = 0xa00
+read = true
+write = false
+execute = false
+
+# RAM region used to hand DICE artifacts forward to the attestation responder
+[[dice_alias]]
+name = "a"
+address = 0x40100a00
+size = 0x800
+read = true
+write = true
+execute = false
+
+[[dice_alias]]
+name = "b"
+address = 0x40100a00
+size = 0x800
+read = true
+write = true
+execute = false

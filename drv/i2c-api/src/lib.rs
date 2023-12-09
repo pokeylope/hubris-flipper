@@ -24,151 +24,8 @@
 
 use zerocopy::{AsBytes, FromBytes};
 
-use derive_idol_err::IdolError;
+pub use drv_i2c_types::*;
 use userlib::*;
-
-#[derive(FromPrimitive, Eq, PartialEq)]
-pub enum Op {
-    WriteRead = 1,
-    WriteReadBlock = 2,
-}
-
-/// The response code returned from the I2C controller (or from the kernel in
-/// the case of [`ResponseCode::Dead`]).  These response codes pretty specific,
-/// not because the caller is expected to necessarily handle them differently,
-/// but to give upstack software some modicum of context surrounding the error.
-#[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq, IdolError)]
-#[repr(u32)]
-pub enum ResponseCode {
-    /// Server has died
-    Dead = core::u32::MAX,
-    /// Bad response from server
-    BadResponse = 1,
-    /// Bad argument sent to server
-    BadArg = 2,
-    /// Indicated I2C device is invalid
-    NoDevice = 3,
-    /// Indicated I2C controller is invalid
-    BadController = 4,
-    /// Device address is reserved
-    ReservedAddress = 5,
-    /// Indicated port is invalid
-    BadPort = 6,
-    /// Device does not have indicated register
-    NoRegister = 8,
-    /// Indicated mux is an invalid mux identifier
-    BadMux = 9,
-    /// Indicated segment is an invalid segment identifier
-    BadSegment = 10,
-    /// Indicated mux does not exist on this controller
-    MuxNotFound = 11,
-    /// Indicated segment does not exist on this controller
-    SegmentNotFound = 12,
-    /// Segment disconnected during operation
-    SegmentDisconnected = 13,
-    /// Mux disconnected during operation
-    MuxDisconnected = 14,
-    /// Address used for mux in-band management is invalid
-    BadMuxAddress = 15,
-    /// Register used for mux in-band management is invalid
-    BadMuxRegister = 16,
-    /// I2C bus was spontaneously reset during operation
-    BusReset = 17,
-    /// I2C bus was reset during a mux in-band management operation
-    BusResetMux = 18,
-    /// I2C bus locked up and was reset
-    BusLocked = 19,
-    /// I2C bus locked up during in-band management operation and was reset
-    BusLockedMux = 20,
-    /// I2C controller appeared to be locked and was reset
-    ControllerLocked = 21,
-    /// I2C bus error
-    BusError = 22,
-}
-
-///
-/// The controller for a given I2C device. The numbering here should be
-/// assumed to follow the numbering for the peripheral as described by the
-/// microcontroller.
-///
-#[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq)]
-#[repr(u8)]
-pub enum Controller {
-    I2C0 = 0,
-    I2C1 = 1,
-    I2C2 = 2,
-    I2C3 = 3,
-    I2C4 = 4,
-    I2C5 = 5,
-    I2C6 = 6,
-    I2C7 = 7,
-    Mock = 0xff,
-}
-
-#[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq)]
-#[allow(clippy::unusual_byte_groupings)]
-pub enum ReservedAddress {
-    GeneralCall = 0b0000_000,
-    CBUSAddress = 0b0000_001,
-    FutureBus = 0b0000_010,
-    FuturePurposes = 0b0000_011,
-    HighSpeedReserved00 = 0b0000_100,
-    HighSpeedReserved01 = 0b0000_101,
-    HighSpeedReserved10 = 0b0000_110,
-    HighSpeedReserved11 = 0b0000_111,
-    TenBit00 = 0b1111_100,
-    TenBit01 = 0b1111_101,
-    TenBit10 = 0b1111_110,
-    TenBit11 = 0b1111_111,
-}
-
-///
-/// The port index for a given I2C device.  Some controllers can have multiple
-/// ports (which themselves are connected to different I2C buses), but only
-/// one port can be active at a time.  For these controllers, a port index
-/// must be specified.  The mapping between these indices and values that make
-/// sense in terms of the I2C controller (e.g., the lettered port) is
-/// specified in the application configuration; to minimize confusion, the
-/// letter should generally match the GPIO port of the I2C bus (assuming that
-/// GPIO ports are lettered), but these values are in fact strings and can
-/// take any value.  Note that if a given I2C controller straddles two ports,
-/// the port of SDA should generally be used when naming the port; if a GPIO
-/// port contains multiple SDAs on it from the same controller, the
-/// letter/number convention should be used (e.g., "B1") -- but this is purely
-/// convention.
-///
-#[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq)]
-pub struct PortIndex(pub u8);
-
-///
-/// A multiplexer identifier for a given I2C bus.  Multiplexer identifiers
-/// need not start at 0.
-///
-#[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq)]
-#[repr(u8)]
-pub enum Mux {
-    M1 = 1,
-    M2 = 2,
-    M3 = 3,
-    M4 = 4,
-}
-
-///
-/// A segment identifier on a given multiplexer.  Segment identifiers
-/// need not start at 0.
-///
-#[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq)]
-#[repr(u8)]
-pub enum Segment {
-    S1 = 1,
-    S2 = 2,
-    S3 = 3,
-    S4 = 4,
-    S5 = 5,
-    S6 = 6,
-    S7 = 7,
-    S8 = 8,
-}
 
 ///
 /// The 5-tuple that uniquely identifies an I2C device.  The multiplexer and
@@ -197,7 +54,7 @@ impl Marshal<[u8; 4]> for I2cMessage {
         [
             self.0,
             self.1 as u8,
-            self.2 .0 as u8,
+            self.2 .0,
             match self.3 {
                 Some((mux, seg)) => {
                     0b1000_0000 | ((mux as u8) << 4) | (seg as u8)
@@ -268,6 +125,19 @@ impl I2cDevice {
 }
 
 impl I2cDevice {
+    fn response_code<V>(&self, code: u32, val: V) -> Result<V, ResponseCode> {
+        if code != 0 {
+            if let Some(_g) = userlib::extract_new_generation(code) {
+                panic!("i2c reset");
+            }
+
+            Err(ResponseCode::from_u32(code)
+                .ok_or(ResponseCode::BadResponse)?)
+        } else {
+            Ok(val)
+        }
+    }
+
     ///
     /// Reads a register, with register address of type R and value of type V.
     ///
@@ -285,11 +155,11 @@ impl I2cDevice {
     ///
     /// On failure, a [`ResponseCode`] will indicate more detail.
     ///
-    pub fn read_reg<R: AsBytes, V: Default + AsBytes + FromBytes>(
+    pub fn read_reg<R: AsBytes, V: AsBytes + FromBytes>(
         &self,
         reg: R,
     ) -> Result<V, ResponseCode> {
-        let mut val = V::default();
+        let mut val = V::new_zeroed();
         let mut response = 0_usize;
 
         let (code, _) = sys_send(
@@ -305,12 +175,7 @@ impl I2cDevice {
             &[Lease::from(reg.as_bytes()), Lease::from(val.as_bytes_mut())],
         );
 
-        if code != 0 {
-            Err(ResponseCode::from_u32(code)
-                .ok_or(ResponseCode::BadResponse)?)
-        } else {
-            Ok(val)
-        }
+        self.response_code(code, val)
     }
 
     ///
@@ -338,12 +203,7 @@ impl I2cDevice {
             &[Lease::from(reg.as_bytes()), Lease::from(buf)],
         );
 
-        if code != 0 {
-            Err(ResponseCode::from_u32(code)
-                .ok_or(ResponseCode::BadResponse)?)
-        } else {
-            Ok(response)
-        }
+        self.response_code(code, response)
     }
 
     ///
@@ -373,12 +233,7 @@ impl I2cDevice {
             &[Lease::from(reg.as_bytes()), Lease::from(buf)],
         );
 
-        if code != 0 {
-            Err(ResponseCode::from_u32(code)
-                .ok_or(ResponseCode::BadResponse)?)
-        } else {
-            Ok(response)
-        }
+        self.response_code(code, response)
     }
 
     ///
@@ -388,11 +243,8 @@ impl I2cDevice {
     /// (And indeed, on these devices, attempting to read a register will
     /// in fact overwrite the contents of the first two registers.)
     ///
-    pub fn read<V: Default + AsBytes + FromBytes>(
-        &self,
-    ) -> Result<V, ResponseCode> {
-        let empty = [0u8; 1];
-        let mut val = V::default();
+    pub fn read<V: AsBytes + FromBytes>(&self) -> Result<V, ResponseCode> {
+        let mut val = V::new_zeroed();
         let mut response = 0_usize;
 
         let (code, _) = sys_send(
@@ -405,15 +257,10 @@ impl I2cDevice {
                 self.segment,
             )),
             response.as_bytes_mut(),
-            &[Lease::from(&empty[0..0]), Lease::from(val.as_bytes_mut())],
+            &[Lease::read_only(&[]), Lease::from(val.as_bytes_mut())],
         );
 
-        if code != 0 {
-            Err(ResponseCode::from_u32(code)
-                .ok_or(ResponseCode::BadResponse)?)
-        } else {
-            Ok(val)
-        }
+        self.response_code(code, val)
     }
 
     ///
@@ -422,7 +269,6 @@ impl I2cDevice {
     /// the specified mutable slice, returning the number of bytes read.
     ///
     pub fn read_into(&self, buf: &mut [u8]) -> Result<usize, ResponseCode> {
-        let empty = [0u8; 1];
         let mut response = 0_usize;
 
         let (code, _) = sys_send(
@@ -435,15 +281,10 @@ impl I2cDevice {
                 self.segment,
             )),
             response.as_bytes_mut(),
-            &[Lease::from(&empty[0..0]), Lease::from(buf)],
+            &[Lease::read_only(&[]), Lease::from(buf)],
         );
 
-        if code != 0 {
-            Err(ResponseCode::from_u32(code)
-                .ok_or(ResponseCode::BadResponse)?)
-        } else {
-            Ok(response)
-        }
+        self.response_code(code, response)
     }
 
     ///
@@ -451,7 +292,6 @@ impl I2cDevice {
     /// perform any follow-up reads.
     ///
     pub fn write(&self, buffer: &[u8]) -> Result<(), ResponseCode> {
-        let empty = [0u8; 1];
         let mut response = 0_usize;
 
         let (code, _) = sys_send(
@@ -464,14 +304,163 @@ impl I2cDevice {
                 self.segment,
             )),
             response.as_bytes_mut(),
-            &[Lease::from(buffer), Lease::from(&empty[0..0])],
+            &[Lease::from(buffer), Lease::read_only(&[])],
         );
 
-        if code != 0 {
-            Err(ResponseCode::from_u32(code)
-                .ok_or(ResponseCode::BadResponse)?)
-        } else {
-            Ok(())
-        }
+        self.response_code(code, ())
+    }
+
+    ///
+    /// Writes a buffer, and then performs a subsequent register read.  These
+    /// are not performed as a single I2C transaction (that is, it is not a
+    /// repeated start) -- but the effect is the same in that the server does
+    /// these operations without an intervening receive (assuring that the
+    /// write can modify device state that the subsequent register read can
+    /// assume).
+    ///
+    pub fn write_read_reg<R: AsBytes, V: AsBytes + FromBytes>(
+        &self,
+        reg: R,
+        buffer: &[u8],
+    ) -> Result<V, ResponseCode> {
+        let mut val = V::new_zeroed();
+        let mut response = 0_usize;
+
+        let (code, _) = sys_send(
+            self.task,
+            Op::WriteRead as u16,
+            &Marshal::marshal(&(
+                self.address,
+                self.controller,
+                self.port,
+                self.segment,
+            )),
+            response.as_bytes_mut(),
+            &[
+                Lease::from(buffer),
+                Lease::read_only(&[]),
+                Lease::from(reg.as_bytes()),
+                Lease::from(val.as_bytes_mut()),
+            ],
+        );
+
+        self.response_code(code, val)
+    }
+
+    ///
+    /// Performs a write followed by an SMBus block read (in which the first
+    /// byte returned from the device contains the total number of bytes to
+    /// read) into the specified buffer, returning the total number of bytes
+    /// read.  Note that the byte count is only returned from the function; it
+    /// is *not* present as the payload's first byte.
+    ///
+    /// The write and read are not performed as a single I2C transaction (that
+    /// is, it is not a repeated start) -- but the effect is the same in that
+    /// the server does these operations without an intervening receive
+    /// (assuring that the write can modify device state that the subsequent
+    /// read can assume).
+    ///
+    pub fn write_read_block<R: AsBytes>(
+        &self,
+        reg: R,
+        buffer: &[u8],
+        out: &mut [u8],
+    ) -> Result<usize, ResponseCode> {
+        let mut response = 0_usize;
+
+        let (code, _) = sys_send(
+            self.task,
+            Op::WriteReadBlock as u16,
+            &Marshal::marshal(&(
+                self.address,
+                self.controller,
+                self.port,
+                self.segment,
+            )),
+            response.as_bytes_mut(),
+            &[
+                Lease::from(buffer),
+                Lease::read_only(&[]),
+                Lease::from(reg.as_bytes()),
+                Lease::from(out),
+            ],
+        );
+
+        self.response_code(code, response)
+    }
+
+    ///
+    /// Writes one buffer to a device, and then another.  These are not
+    /// performed as a single I2C transaction (that is, it is not a repeated
+    /// start) -- but the effect is the same in that the server does these
+    /// operations without an intervening receive (assuring that the write can
+    /// modify device state that the subsequent write can assume).
+    ///
+    pub fn write_write(
+        &self,
+        first: &[u8],
+        second: &[u8],
+    ) -> Result<(), ResponseCode> {
+        let mut response = 0_usize;
+
+        let (code, _) = sys_send(
+            self.task,
+            Op::WriteRead as u16,
+            &Marshal::marshal(&(
+                self.address,
+                self.controller,
+                self.port,
+                self.segment,
+            )),
+            response.as_bytes_mut(),
+            &[
+                Lease::from(first),
+                Lease::read_only(&[]),
+                Lease::from(second),
+                Lease::read_only(&[]),
+            ],
+        );
+
+        self.response_code(code, ())
+    }
+
+    ///
+    /// Writes one buffer to a device, and then another, and then performs a
+    /// register read.  As with [`write_read_reg`] and [`write_write`], these
+    /// are not performed as a single I2C transaction, but the effect is the
+    /// same in that the server does these operations without an intervening
+    /// receive.  This is to accommodate devices that have multiple axes of
+    /// configuration (e.g., regulators that have both rail and phase).
+    ///
+    pub fn write_write_read_reg<R: AsBytes, V: AsBytes + FromBytes>(
+        &self,
+        reg: R,
+        first: &[u8],
+        second: &[u8],
+    ) -> Result<V, ResponseCode> {
+        let mut val = V::new_zeroed();
+        let mut response = 0_usize;
+
+        let (code, _) = sys_send(
+            self.task,
+            Op::WriteRead as u16,
+            &Marshal::marshal(&(
+                self.address,
+                self.controller,
+                self.port,
+                self.segment,
+            )),
+            response.as_bytes_mut(),
+            &[
+                Lease::from(first),
+                Lease::read_only(&[]),
+                Lease::from(second),
+                Lease::read_only(&[]),
+                Lease::from(reg.as_bytes()),
+                Lease::from(val.as_bytes_mut()),
+            ],
+        );
+
+        self.response_code(code, val)
     }
 }

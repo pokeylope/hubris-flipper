@@ -5,22 +5,31 @@
 #![no_std]
 
 use derive_idol_err::IdolError;
+use hubpack::SerializedSize;
 use serde::{Deserialize, Serialize};
-use userlib::{FromPrimitive, ToPrimitive};
+use userlib::*;
+
+pub use vsc85xx::{
+    tesla::{TeslaSerdes6gObConfig, TeslaSerdes6gPatch},
+    vsc8562::{Sd6gObCfg, Sd6gObCfg1},
+};
 
 pub use vsc7448::{
-    config::{PortConfig, PortDev, PortMode},
+    config::{PortConfig, PortDev, PortMode, PortSerdes, Speed},
     VscError,
 };
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+/// Maximum number of ports
+pub const PORT_COUNT: usize = vsc7448::PORT_COUNT;
+
+#[derive(Copy, Clone, Debug, Serialize, SerializedSize, Deserialize)]
 #[repr(C)]
 pub struct PortStatus {
     pub cfg: PortConfig,
     pub link_up: LinkStatus,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, SerializedSize, Deserialize)]
 #[repr(C)]
 pub struct PacketCount {
     pub multicast: u32,
@@ -28,11 +37,28 @@ pub struct PacketCount {
     pub broadcast: u32,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, SerializedSize, Deserialize)]
 #[repr(C)]
 pub struct PortCounters {
     pub rx: PacketCount,
     pub tx: PacketCount,
+
+    /// `true` if the link has gone down since the last call to
+    /// `port_reset_counters`
+    ///
+    /// Due to hardware differences between 1G and 10G ports, this has slightly
+    /// different semantics depending on port speed:
+    /// - On the 1G ports, this is `LINK_DOWN_STICKY` | `OUT_OF_SYNC_STICKY`
+    /// - For the 10G port, this is `LOCK_CHANGED_STICKY`, i.e. it will _also_
+    ///   be true if the link went from down -> up
+    pub link_down_sticky: bool,
+
+    /// `true` if this port has a PHY attached and the PHY's link down bit is
+    /// set.  This is typically bit 13 in the interrupt status (0x1A) register.
+    ///
+    /// Note that the link down bit must be enabled in the interrupt mask
+    /// register!
+    pub phy_link_down_sticky: bool,
 }
 
 /// Error-code-only version of [VscError], for use in RPC calls
@@ -41,8 +67,7 @@ pub struct PortCounters {
 )]
 #[repr(C)]
 pub enum MonorailError {
-    SpiError,
-    ServerDied,
+    SpiError = 1,
     ProxyError,
     BadChipId,
     Serdes1gReadTimeout,
@@ -96,6 +121,9 @@ pub enum MonorailError {
     UnconfiguredPort,
     /// The given port does not have a PHY associated with it
     NoPhy,
+
+    #[idol(server_death)]
+    ServerDied,
 }
 
 impl From<VscError> for MonorailError {
@@ -160,7 +188,9 @@ impl From<VscError> for MonorailError {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(
+    Copy, Clone, Debug, Serialize, SerializedSize, Deserialize, Eq, PartialEq,
+)]
 #[repr(C)]
 pub enum PhyType {
     Vsc8504,
@@ -184,7 +214,9 @@ impl PhyType {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(
+    Copy, Clone, Debug, Serialize, SerializedSize, Deserialize, Eq, PartialEq,
+)]
 #[repr(C)]
 pub enum LinkStatus {
     /// MAC_SYNC_FAIL or MAC_CGBAD is set
@@ -193,7 +225,7 @@ pub enum LinkStatus {
     Up,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, SerializedSize, Deserialize)]
 #[repr(C)]
 pub struct PhyStatus {
     pub ty: PhyType,
@@ -207,3 +239,6 @@ pub struct MacTableEntry {
     pub mac: [u8; 6],
     pub port: u16,
 }
+
+use crate as drv_monorail_api;
+include!(concat!(env!("OUT_DIR"), "/client_stub.rs"));

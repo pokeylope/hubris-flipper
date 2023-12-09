@@ -76,6 +76,7 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use zerocopy::FromBytes;
 
 use crate::atomic::AtomicExt;
+use crate::descs::RegionAttributes;
 use crate::startup::with_task_table;
 use crate::task;
 use crate::time::Timestamp;
@@ -83,6 +84,8 @@ use crate::umem::USlice;
 use abi::FaultInfo;
 #[cfg(any(armv7m, armv8m))]
 use abi::FaultSource;
+#[cfg(armv8m)]
+use armv8_m_mpu::{disable_mpu, enable_mpu};
 use unwrap_lite::UnwrapLite;
 
 macro_rules! uassert {
@@ -256,6 +259,15 @@ const INITIAL_PSR: u32 = 1 << 24;
 #[cfg(any(armv7m, armv8m))]
 const INITIAL_FPSCR: u32 = 0;
 
+/// EXC_RETURN is used on ARMv8m to return from an exception. This value
+/// differs between secure and non-secure in two important ways:
+/// bit 6 = S = secure or non-secure stack used
+/// bit 0 = ES = the security domain the exception was taken to
+/// These need to be consistent! The failure mode is a secure fault otherwise.
+/// We currently assume that TrustZone has not been enabled (even on the parts
+/// that support it) (and that bit 6 and bit 0 can always be set).
+const EXC_RETURN_CONST: u32 = 0xFFFFFFED;
+
 // Because debuggers need to know the clock frequency to set the SWO clock
 // scaler that enables ITM, and because ITM is particularly useful when
 // debugging boot failures, this should be set as early in boot as it can
@@ -266,7 +278,7 @@ pub unsafe fn set_clock_freq(tick_divisor: u32) {
 
 pub fn reinitialize(task: &mut task::Task) {
     *task.save_mut() = SavedState::default();
-    let initial_stack = task.descriptor().initial_stack;
+    let initial_stack = task.descriptor().initial_stack as usize;
 
     // Modern ARMvX-M machines require 8-byte stack alignment. Make sure that's
     // still true. Note that this carries the risk of panic on task re-init if
@@ -278,25 +290,21 @@ pub fn reinitialize(task: &mut task::Task) {
     let frame_size = core::mem::size_of::<ExtendedExceptionFrame>();
     // The subtract below can overflow if the task table is corrupt -- let's
     // make that failure a little easier to read:
-    uassert!(initial_stack as usize >= frame_size);
+    uassert!(initial_stack >= frame_size);
     // Ok. Generate a uslice for the task's starting stack frame.
     let mut frame_uslice: USlice<ExtendedExceptionFrame> =
-        USlice::from_raw(initial_stack as usize - frame_size, 1).unwrap_lite();
+        USlice::from_raw(initial_stack - frame_size, 1).unwrap_lite();
     // Before we set our frame, find the region that contains our initial stack
     // pointer, and zap the region from the base to the stack pointer with a
     // distinct (and storied) pattern.
-    for region in task.region_table().iter() {
-        if initial_stack < region.base {
-            continue;
-        }
-
-        if initial_stack > region.base + region.size {
-            continue;
-        }
-
+    if let Some(region) = task
+        .region_table()
+        .iter()
+        .find(|region| region.contains(initial_stack))
+    {
         let mut uslice: USlice<u32> = USlice::from_raw(
             region.base as usize,
-            (initial_stack as usize - frame_size - region.base as usize) >> 2,
+            (initial_stack - frame_size - region.base as usize) >> 2,
         )
         .unwrap_lite();
 
@@ -340,16 +348,13 @@ pub fn apply_memory_protection(task: &task::Task) {
     };
 
     for (i, region) in task.region_table().iter().enumerate() {
-        let rbar = (i as u32)  // region number
-            | (1 << 4)  // honor the region number
-            | region.base;
         let ratts = region.attributes;
-        let xn = !ratts.contains(abi::RegionAttributes::EXECUTE);
+        let xn = !ratts.contains(RegionAttributes::EXECUTE);
         // These AP encodings are chosen such that we never deny *privileged*
         // code (i.e. us) access to the memory.
-        let ap = if ratts.contains(abi::RegionAttributes::WRITE) {
+        let ap = if ratts.contains(RegionAttributes::WRITE) {
             0b011
-        } else if ratts.contains(abi::RegionAttributes::READ) {
+        } else if ratts.contains(RegionAttributes::READ) {
             0b010
         } else {
             0b001
@@ -358,10 +363,10 @@ pub fn apply_memory_protection(task: &task::Task) {
         // shareability (with other cores or masters). See table B3-13 in the
         // ARMv7-M ARM. (Settings are identical on v6-M but the sharability and
         // TEX bits tend to be ignored.)
-        let (tex, scb) = if ratts.contains(abi::RegionAttributes::DEVICE) {
+        let (tex, scb) = if ratts.contains(RegionAttributes::DEVICE) {
             // Device memory.
             (0b000, 0b001)
-        } else if ratts.contains(abi::RegionAttributes::DMA) {
+        } else if ratts.contains(RegionAttributes::DMA) {
             // Conservative settings for normal memory assuming that DMA might
             // be a problem:
             // - Outer and inner non-cacheable.
@@ -407,15 +412,17 @@ pub fn apply_memory_protection(task: &task::Task) {
         // with it.
         let l2size = 30 - region.size.leading_zeros();
 
-        let rasr = (xn as u32) << 28
-            | ap << 24
-            | tex << 19
-            | scb << 16
-            | l2size << 1
-            | (1 << 0); // enable
+        // Region attribute and size register; note that enable (bit 0) is not
+        // set here, because it's possible to hard-fault midway through region
+        // configuration if address and size are incompatible while the region
+        // is enabled.
+        let rasr =
+            (xn as u32) << 28 | ap << 24 | tex << 19 | scb << 16 | l2size << 1;
         unsafe {
-            mpu.rbar.write(rbar);
-            mpu.rasr.write(rasr);
+            mpu.rnr.write(i as u32); // Select the region
+            mpu.rasr.write(rasr); // configure, but leave disabled
+            mpu.rbar.write(region.base); // set region address
+            mpu.rasr.write(rasr | 1); // enable the region
         }
     }
 }
@@ -428,15 +435,7 @@ pub fn apply_memory_protection(task: &task::Task) {
         &*cortex_m::peripheral::MPU::PTR
     };
     unsafe {
-        const DISABLE: u32 = 0b000;
-        const PRIVDEFENA: u32 = 0b100;
-        // From the ARMv8m MPU manual
-        //
-        // Any outstanding memory transactions must be forced to complete by
-        // executing a DMB instruction and the MPU disabled before it can be
-        // configured
-        cortex_m::asm::dmb();
-        mpu.ctrl.write(DISABLE | PRIVDEFENA);
+        disable_mpu(mpu);
     }
 
     for (i, region) in task.region_table().iter().enumerate() {
@@ -447,37 +446,37 @@ pub fn apply_memory_protection(task: &task::Task) {
         let rnr = i as u32;
 
         let ratts = region.attributes;
-        let xn = !ratts.contains(abi::RegionAttributes::EXECUTE);
+        let xn = !ratts.contains(RegionAttributes::EXECUTE);
         // ARMv8m has less granularity than ARMv7m for privilege
         // vs non-privilege so there's no way to say that privilege
         // can be read write but non-privilge can only be read only
         // This _should_ be okay?
-        let ap = if ratts.contains(abi::RegionAttributes::WRITE) {
+        let ap = if ratts.contains(RegionAttributes::WRITE) {
             0b01 // RW by any privilege level
-        } else if ratts.contains(abi::RegionAttributes::READ) {
+        } else if ratts.contains(RegionAttributes::READ) {
             0b11 // Read only by any privilege level
         } else {
             0b00 // RW by privilege code only
         };
 
-        let (mair, sh) = if ratts.contains(abi::RegionAttributes::DEVICE) {
+        let (mair, sh) = if ratts.contains(RegionAttributes::DEVICE) {
             // Most restrictive: device memory, outer shared.
             (0b00000000, 0b10)
-        } else if ratts.contains(abi::RegionAttributes::DMA) {
+        } else if ratts.contains(RegionAttributes::DMA) {
             // Outer/inner non-cacheable, outer shared.
             (0b01000100, 0b10)
         } else {
-            let rw = u32::from(ratts.contains(abi::RegionAttributes::READ))
-                << 1
-                | u32::from(ratts.contains(abi::RegionAttributes::WRITE));
+            let rw = u32::from(ratts.contains(RegionAttributes::READ)) << 1
+                | u32::from(ratts.contains(RegionAttributes::WRITE));
             // write-back transient, not shared
             (0b0100_0100 | rw | rw << 4, 0b00)
         };
 
-        // RLAR = our upper bound
-        let rlar = (region.base + region.size)
-                | (i as u32) << 1 // AttrIndx
-                | (1 << 0); // enable
+        // RLAR = our upper bound; note that enable (bit 0) is not set, because
+        // it's possible to hard-fault midway through region configuration if
+        // address and size are incompatible while the region is enabled.
+        let rlar = (region.base + region.size - 32) // upper bound
+            | (i as u32) << 1; // AttrIndx
 
         // RBAR = the base
         let rbar = (xn as u32)
@@ -487,33 +486,23 @@ pub fn apply_memory_protection(task: &task::Task) {
 
         unsafe {
             mpu.rnr.write(rnr);
+            mpu.rlar.write(rlar); // configure but leave disabled
             if rnr < 4 {
                 let mut mair0 = mpu.mair[0].read();
-                mair0 |= (mair as u32) << (rnr * 8);
+                mair0 |= mair << (rnr * 8);
                 mpu.mair[0].write(mair0);
             } else {
                 let mut mair1 = mpu.mair[1].read();
-                mair1 |= (mair as u32) << ((rnr - 4) * 8);
+                mair1 |= mair << ((rnr - 4) * 8);
                 mpu.mair[1].write(mair1);
             }
             mpu.rbar.write(rbar);
-            mpu.rlar.write(rlar);
+            mpu.rlar.write(rlar | 1); // enable the region
         }
     }
 
     unsafe {
-        const ENABLE: u32 = 0b001;
-        const PRIVDEFENA: u32 = 0b100;
-        mpu.ctrl.write(ENABLE | PRIVDEFENA);
-        // From the ARMv8m MPU manual
-        //
-        // The final step is to enable the MPU by writing to MPU_CTRL. Code
-        // should then execute a memory barrier to ensure that the register
-        // updates are seen by any subsequent memory accesses. An Instruction
-        // Synchronization Barrier (ISB) ensures the updated configuration
-        // [is] used by any subsequent instructions.
-        cortex_m::asm::dmb();
-        cortex_m::asm::isb();
+        enable_mpu(mpu, true);
     }
 }
 
@@ -825,7 +814,7 @@ pub unsafe extern "C" fn SVCall() {
                     mov lr, r0
                     bx lr                   @ branch into user mode
                     ",
-                    exc_return = const EXC_RETURN_CONST as u32,
+                    exc_return = const EXC_RETURN_CONST,
                     options(noreturn),
                 )
             } else if #[cfg(any(armv7m, armv8m))] {
@@ -883,7 +872,7 @@ pub unsafe extern "C" fn SVCall() {
 
                     bx lr                   @ branch into user mode
                     ",
-                    exc_return = const EXC_RETURN_CONST as u32,
+                    exc_return = const EXC_RETURN_CONST,
                     options(noreturn),
                 )
             } else {
@@ -1130,7 +1119,7 @@ pub unsafe extern "C" fn DefaultHandler() {
             let irq_num = exception_num - 16;
             let owner = crate::startup::HUBRIS_IRQ_TASK_LOOKUP
                 .get(abi::InterruptNum(irq_num))
-                .unwrap_or_else(|| panic!("unhandled IRQ {}", irq_num));
+                .unwrap_or_else(|| panic!("unhandled IRQ {irq_num}"));
 
             let switch = with_task_table(|tasks| {
                 disable_irq(irq_num);
@@ -1145,7 +1134,7 @@ pub unsafe extern "C" fn DefaultHandler() {
             }
         }
 
-        _ => panic!("unknown exception {}", exception_num),
+        _ => panic!("unknown exception {exception_num}"),
     }
     crate::profiling::event_isr_exit();
 }
@@ -1404,6 +1393,29 @@ unsafe extern "C" fn handle_fault(task: *mut task::Task) {
         panic!("Kernel fault");
     }
 
+    // Okay, now that we're confident we came from a task, we need to deal with
+    // the case where the fault occurred while stacking an SVC exception frame.
+    // In this case, the SVC exception will still be set as pending, which means
+    // when we try to return to the supervisor to handle this fault, it'll
+    // generate a spurious SVC. Even in the best of cases, this breaks the
+    // supervisor.
+    //
+    // SVCALLPENDED is in the System Handler Control and State Register, bit 15,
+    // and we need to clear its bit. We do this unconditionally because it
+    // doesn't hurt, and it's slightly faster/smaller.
+    //
+    // (If you're comparing this to the ARMv7/v8-M equivalent, note that v6-M
+    // lacks the usage/mem/bus faults present in v7/8.)
+    //
+    // Safety: the cortex-m crate makes all these registers blanket-unsafe
+    // without documenting the required preconditions. From the ARMv7-M spec, we
+    // can infer that the main risk here is if SVC were higher priority than
+    // this handler, which it is not.
+    unsafe {
+        let scb = &*cortex_m::peripheral::SCB::PTR;
+        scb.shcsr.modify(|bits| bits & !(1 << 15));
+    }
+
     // ARMv6-M, to reduce complexity, does not distinguish fault causes.
     let fault = FaultInfo::InvalidOperation(0);
 
@@ -1417,7 +1429,7 @@ unsafe extern "C" fn handle_fault(task: *mut task::Task) {
         };
 
         if next == idx {
-            panic!("attempt to return to Task #{} after fault", idx);
+            panic!("attempt to return to Task #{idx} after fault");
         }
 
         let next = &mut tasks[next];
@@ -1496,6 +1508,43 @@ unsafe extern "C" fn handle_fault(
             scb.mmfar.read(),
             scb.bfar.read(),
         );
+    }
+
+    // Okay, now that we're confident we came from a task, we need to deal with
+    // the case where the fault is **derived.** In ARMvX-M jargon, a derived
+    // fault is one produced by attempting to handle a different exception or
+    // fault. In our case these are almost always due to mishandling of the
+    // stack by the task, e.g.
+    //
+    // - Making a syscall (SVC) without enough stack space for the exception
+    //   frame,
+    // - Setting your stack pointer to NULL and then taking an interrupt or
+    //   fault, or
+    // - Dereferencing NULL, or executing an illegal instruction, without enough
+    //   stack.
+    //
+    // In these cases, we'll wind up taking a MemManage fault, but the original
+    // exception from which it was derived (SVC, Bus, Usage, etc) will still be
+    // set to *pending* in the interrupt hardware. This means that after we
+    // handle the fault, when we try to return-from-interrupt into the
+    // supervisor task, we'll still try to handle the pended exception.
+    //
+    // This will appear as though _the supervisor_ has called it, generating a
+    // phantom fault or syscall. This breaks things.
+    //
+    // This only affects architectural exceptions/faults and not hardware
+    // interrupts, which we _do_ want to process even if a fault occurred. The
+    // pended bits for those exceptions/faults are in the System Handler Control
+    // and State Register, bits 15:12. We need to clear them. We do this
+    // unconditionally because it doesn't hurt, and it's slightly
+    // faster/smaller.
+    //
+    // Safety: the cortex-m crate makes all these registers blanket-unsafe
+    // without documenting the required preconditions. From the ARMv7-M spec, we
+    // can infer that the main risk here is if SVC were higher priority than
+    // this handler, which it is not.
+    unsafe {
+        scb.shcsr.modify(|bits| bits & !(0b1111 << 12));
     }
 
     let (fault, stackinvalid) = match fault_type {
@@ -1594,7 +1643,7 @@ unsafe extern "C" fn handle_fault(
         };
 
         if next == idx {
-            panic!("attempt to return to Task #{} after fault", idx);
+            panic!("attempt to return to Task #{idx} after fault");
         }
 
         let next = &mut tasks[next];
@@ -1676,6 +1725,3 @@ cfg_if::cfg_if! {
 
     }
 }
-
-// Constants that may change depending on configuration
-include!(concat!(env!("OUT_DIR"), "/consts.rs"));

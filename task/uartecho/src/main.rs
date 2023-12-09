@@ -25,9 +25,6 @@ enum UartLog {
 
 ringbuf!(UartLog, 64, UartLog::Rx(0));
 
-/// Notification mask for USART IRQ; must match configuration in app.toml.
-const USART_IRQ: u32 = 1;
-
 /// Size in bytes of our in-memory buffer to store a line to echo back; lines
 /// longer than this will be truncated to this many bytes.
 const BUF_LEN: usize = 32;
@@ -45,12 +42,16 @@ fn main() -> ! {
     let mut line_buf = Deque::<u8, BUF_LEN>::new();
     let mut need_to_tx = None;
 
-    sys_irq_control(USART_IRQ, true);
+    sys_irq_control(notifications::USART_IRQ_MASK, true);
 
     loop {
         // Wait for uart interrupt; if we haven't enabled tx interrupts, this
         // blocks until there's data to receive.
-        let _ = sys_recv_closed(&mut [], USART_IRQ, TaskId::KERNEL);
+        let _ = sys_recv_closed(
+            &mut [],
+            notifications::USART_IRQ_MASK,
+            TaskId::KERNEL,
+        );
 
         // Walk through our tx state machine to handle echoing lines back; note
         // that many of these cases intentionally break after refilling
@@ -71,9 +72,9 @@ fn main() -> ! {
                     // transmit the first, and if we send all of it, try to
                     // transmit the second.
                     let (line_buf0, line_buf1) = line_buf.as_slices();
-                    let mut n = tx_until_fifo_full(&uart, &line_buf0);
+                    let mut n = tx_until_fifo_full(&uart, line_buf0);
                     if n == line_buf0.len() {
-                        n += tx_until_fifo_full(&uart, &line_buf1);
+                        n += tx_until_fifo_full(&uart, line_buf1);
                     }
 
                     // Remove all the data we sent from our buffer.
@@ -111,7 +112,7 @@ fn main() -> ! {
         // if we filled the tx fifo but still have more to send, reenable our
         // interrupts and loop before we try to rx more
         if need_to_tx.is_some() {
-            sys_irq_control(USART_IRQ, true);
+            sys_irq_control(notifications::USART_IRQ_MASK, true);
             continue;
         }
 
@@ -142,8 +143,8 @@ fn main() -> ! {
             }
         }
 
-        // rennable USART interrupts
-        sys_irq_control(USART_IRQ, true);
+        // re-enable USART interrupts
+        sys_irq_control(notifications::USART_IRQ_MASK, true);
 
         // Uncomment this to artifically slow down the task to make it easier to
         // see RxOverrun errors
@@ -189,10 +190,6 @@ fn configure_uart_device() -> Usart {
 
     let hardware_flow_control = cfg!(feature = "hardware_flow_control");
 
-    let usart;
-    let peripheral;
-    let pins;
-
     cfg_if::cfg_if! {
         if #[cfg(feature = "usart1")] {
             const PINS: &[(PinSet, Alternate)] = {
@@ -215,9 +212,8 @@ fn configure_uart_device() -> Usart {
             // essentially a static, and we access it through a & reference so
             // aliasing is not a concern. Were it literally a static, we could
             // just reference it.
-            usart = unsafe { &*device::USART1::ptr() };
-            peripheral = Peripheral::Usart1;
-            pins = PINS;
+            let usart = unsafe { &*device::USART1::ptr() };
+            let peripheral = Peripheral::Usart1;
         } else if #[cfg(feature = "usart2")] {
             const PINS: &[(PinSet, Alternate)] = {
                 if cfg!(feature = "hardware_flow_control") {
@@ -229,9 +225,8 @@ fn configure_uart_device() -> Usart {
                     &[(Port::D.pin(5).and_pin(6), Alternate::AF7)]
                 }
             };
-            usart = unsafe { &*device::USART2::ptr() };
-            peripheral = Peripheral::Usart2;
-            pins = PINS;
+            let usart = unsafe { &*device::USART2::ptr() };
+            let peripheral = Peripheral::Usart2;
         } else if #[cfg(feature = "uart7")] {
             const PINS: &[(PinSet, Alternate)] = {
                 if cfg!(feature = "hardware_flow_control") {
@@ -243,9 +238,8 @@ fn configure_uart_device() -> Usart {
                     &[(Port::E.pin(7).and_pin(8), Alternate::AF7)]
                 }
             };
-            usart = unsafe { &*device::UART7::ptr() };
-            peripheral = Peripheral::Uart7;
-            pins = PINS;
+            let usart = unsafe { &*device::UART7::ptr() };
+            let peripheral = Peripheral::Uart7;
         } else {
             compile_error!("no usartX/uartX feature specified");
         }
@@ -255,9 +249,11 @@ fn configure_uart_device() -> Usart {
         &Sys::from(SYS.get_task_id()),
         usart,
         peripheral,
-        pins,
+        PINS,
         CLOCK_HZ,
         BAUD_RATE,
         hardware_flow_control,
     )
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

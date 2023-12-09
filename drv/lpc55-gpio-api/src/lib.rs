@@ -4,7 +4,6 @@
 
 #![no_std]
 
-use derive_idol_err::IdolError;
 use userlib::{sys_send, FromPrimitive};
 use zerocopy::AsBytes;
 
@@ -194,17 +193,11 @@ pub enum Direction {
     Output = 1,
 }
 
-#[derive(Copy, Clone, Debug, FromPrimitive, AsBytes)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, FromPrimitive, AsBytes)]
 #[repr(u8)]
 pub enum Value {
     Zero = 0,
     One = 1,
-}
-
-#[derive(Debug, FromPrimitive, IdolError)]
-#[repr(u32)]
-pub enum GpioError {
-    BadArg = 2,
 }
 
 impl Pins {
@@ -240,11 +233,11 @@ impl Pins {
         invert: Invert,
         digimode: Digimode,
         od: Opendrain,
-    ) -> Result<(), GpioError> {
+    ) {
         let (_, conf) =
             Pins::iocon_conf_val(pin, alt, mode, slew, invert, digimode, od);
 
-        self.iocon_configure_raw(pin, conf)
+        self.iocon_configure_raw(pin, conf);
     }
 }
 

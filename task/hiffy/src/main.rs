@@ -17,7 +17,8 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use hif::*;
-use userlib::{util::StaticCell, *};
+use static_cell::*;
+use userlib::*;
 
 #[cfg(armv6m)]
 use armv6m_atomic_hack::AtomicU32Ext;
@@ -34,6 +35,9 @@ cfg_if::cfg_if! {
     } else if #[cfg(feature = "stm32g0")] {
         pub mod stm32g0;
         use crate::stm32g0::*;
+    } else if #[cfg(feature = "testsuite")] {
+        pub mod tests;
+        use crate::tests::*;
     } else {
         pub mod generic;
         use crate::generic::*;
@@ -54,8 +58,12 @@ cfg_if::cfg_if! {
         const HIFFY_TEXT_SIZE: usize = 256;
         const HIFFY_RSTACK_SIZE: usize = 64;
     } else if #[cfg(any(
-        target_board = "gimlet-a",
         target_board = "gimlet-b",
+        target_board = "gimlet-c",
+        target_board = "gimlet-d",
+        target_board = "gimlet-e",
+        target_board = "sidecar-a",
+        target_board = "sidecar-b",
         target_board = "gimletlet-2",
         target_board = "nucleo-h743zi2",
         target_board = "nucleo-h753zi"
@@ -63,7 +71,7 @@ cfg_if::cfg_if! {
         const HIFFY_DATA_SIZE: usize = 20_480;
         const HIFFY_TEXT_SIZE: usize = 2048;
         const HIFFY_RSTACK_SIZE: usize = 2048;
-    } else if #[cfg(target_board = "donglet-g031")] {
+    } else if #[cfg(any(target_board = "donglet-g031", target_board = "oxcon2023g0"))] {
         const HIFFY_DATA_SIZE: usize = 256;
         const HIFFY_TEXT_SIZE: usize = 256;
         const HIFFY_RSTACK_SIZE: usize = 2048;
@@ -77,7 +85,7 @@ cfg_if::cfg_if! {
 /// Number of "scratch" bytes available to Hiffy programs. Humility uses this
 /// to deliver data used by some operations. This number can be increased at
 /// the cost of RAM.
-const HIFFY_SCRATCH_SIZE: usize = 256;
+const HIFFY_SCRATCH_SIZE: usize = 512;
 
 ///
 /// These HIFFY_* global variables constitute the interface with Humility;

@@ -10,13 +10,13 @@ use derive_idol_err::IdolError;
 use sha3::{Digest, Sha3_256};
 use tlvc::{TlvcRead, TlvcReader};
 use userlib::*;
+use zerocopy::{AsBytes, FromBytes};
 
 pub use drv_qspi_api::{PAGE_SIZE_BYTES, SECTOR_SIZE_BYTES};
 
 #[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq, IdolError)]
 pub enum AuxFlashError {
     WriteEnableFailed = 1,
-    ServerRestarted,
     TlvcReaderBeginFailed,
 
     /// The requested slot exceeds the slot count
@@ -45,21 +45,24 @@ pub enum AuxFlashError {
     NoSuchBlob,
     /// Writes to the currently-active slot are not allowed
     SlotActive,
+
+    #[idol(server_death)]
+    ServerRestarted,
 }
 
-#[derive(Copy, Clone, zerocopy::FromBytes, zerocopy::AsBytes)]
+#[derive(Copy, Clone, FromBytes, AsBytes)]
 #[repr(transparent)]
 pub struct AuxFlashId(pub [u8; 20]);
 
-#[derive(Copy, Clone, zerocopy::FromBytes, zerocopy::AsBytes)]
+#[derive(Copy, Clone, PartialEq, Eq, FromBytes, AsBytes)]
 #[repr(transparent)]
 pub struct AuxFlashChecksum(pub [u8; 32]);
 
-#[derive(Copy, Clone, zerocopy::FromBytes, zerocopy::AsBytes)]
+#[derive(Copy, Clone, FromBytes, AsBytes)]
 #[repr(transparent)]
 pub struct AuxFlashTag(pub [u8; 4]);
 
-#[derive(Copy, Clone, zerocopy::FromBytes, zerocopy::AsBytes)]
+#[derive(Copy, Clone, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct AuxFlashBlob {
     pub slot: u32,
@@ -116,7 +119,7 @@ where
                     chunk
                         .read_exact(i, &mut scratch[0..(amount as usize)])
                         .map_err(|_| AuxFlashError::ChunkReadFail)?;
-                    i += amount as u64;
+                    i += amount;
                     sha.update(&scratch[0..(amount as usize)]);
                 }
                 let sha_out = sha.finalize();

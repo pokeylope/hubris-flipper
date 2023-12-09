@@ -4,28 +4,30 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bitflags = "1.2.1"
-userlib = {path = "../../sys/userlib"}
-zerocopy = "0.6.1"
-num-traits = { version = "0.2.12", default-features = false }
-stm32g0 = { git = "https://github.com/oxidecomputer/stm32-rs-nightlies", branch = "stm32g0b1-initial-support", default-features = false, optional = true }
-stm32h7 = {version = "0.14", default-features = false, optional = true}
+drv-stm32xx-gpio-common = { path = "../stm32xx-gpio-common", features = ["server-support"] }
+drv-stm32xx-sys-api = { path = "../stm32xx-sys-api" }
+drv-stm32xx-uid = { path = "../../drv/stm32xx-uid" }
+task-jefe-api = { path="../../task/jefe-api" }
+userlib = { path = "../../sys/userlib" }
+
+bitflags = { workspace = true }
+cfg-if = { workspace = true }
+idol-runtime = { workspace = true }
+num-traits = { workspace = true }
+stm32g0 = { workspace = true, optional = true }
+stm32h7 = { workspace = true, optional = true }
 stm32wb = {version = "0.15.1", default-features = false, optional = true}
-idol-runtime = {git = "https://github.com/oxidecomputer/idolatry.git"}
-drv-stm32xx-sys-api = {path = "../stm32xx-sys-api"}
-drv-stm32xx-gpio-common = {path = "../stm32xx-gpio-common", features = ["server-support"]}
-task-jefe-api = {path="../../task/jefe-api"}
-cfg-if = "1"
+zerocopy = { workspace = true }
 
 [build-dependencies]
-idol = {git = "https://github.com/oxidecomputer/idolatry.git"}
+idol = { workspace = true }
 
 [features]
-family-stm32h7 = ["stm32h7"]
+family-stm32h7 = ["stm32h7", "drv-stm32xx-uid/family-stm32h7"]
 h743 = ["family-stm32h7", "stm32h7/stm32h743", "drv-stm32xx-sys-api/h743", "drv-stm32xx-gpio-common/model-stm32h743"]
 h753 = ["family-stm32h7", "stm32h7/stm32h753", "drv-stm32xx-sys-api/h753", "drv-stm32xx-gpio-common/model-stm32h753"]
 
-family-stm32g0 = ["stm32g0"]
+family-stm32g0 = ["stm32g0", "drv-stm32xx-uid/family-stm32g0"]
 g030 = ["family-stm32g0", "stm32g0/stm32g030", "drv-stm32xx-sys-api/g030", "drv-stm32xx-gpio-common/model-stm32g030"]
 g031 = ["family-stm32g0", "stm32g0/stm32g031", "drv-stm32xx-sys-api/g031", "drv-stm32xx-gpio-common/model-stm32g031"]
 g070 = ["family-stm32g0", "stm32g0/stm32g070", "drv-stm32xx-sys-api/g070", "drv-stm32xx-gpio-common/model-stm32g070"]
@@ -39,4 +41,5 @@ wb55 = ["family-stm32wb", "stm32wb/stm32wb55", "drv-stm32xx-sys-api/wb55"]
 [[bin]]
 name = "drv-stm32xx-sys"
 test = false
+doctest = false
 bench = false

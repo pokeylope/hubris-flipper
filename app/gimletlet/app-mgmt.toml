@@ -3,29 +3,19 @@ target = "thumbv7em-none-eabihf"
 board = "gimletlet-1"
 chip = "../../chips/stm32h7"
 stacksize = 1024
+fwid = true
 
 [kernel]
 name = "gimletlet"
 requires = {flash = 32768, ram = 4096}
-#
-# For the kernel (and for any task that logs), we are required to enable
-# either "itm" (denoting logging/panicking via ARM's Instrumentation Trace
-# Macrocell) or "semihosting" (denoting logging/panicking via ARM
-# semihosting).  We are biased to ITM because semihosting is excruciatingly
-# slow (it is breakpoint based) and has an undesirable failure mode if logging
-# output is generated and debugger is not attached (namely, the target stops).
-# If one does choose to change this to semihosting for purposes of
-# development, be sure to also change it in every task of interest.
-#
-features = ["itm"]
 
 [tasks.jefe]
 name = "task-jefe"
 priority = 0
 max-sizes = {flash = 8192, ram = 2048}
 start = true
-features = ["itm"]
 stacksize = 1536
+notifications = ["fault", "timer"]
 
 [tasks.jefe.config.allowed-callers]
 set_reset_reason = ["sys"]
@@ -36,23 +26,9 @@ name = "drv-stm32xx-sys"
 features = ["h753"]
 priority = 1
 max-sizes = {flash = 2048, ram = 1024}
-uses = ["rcc", "gpios1", "gpios2", "gpios3"]
+uses = ["rcc", "gpios1", "gpios2", "gpios3", "system_flash"]
 start = true
 task-slots = ["jefe"]
-
-[tasks.spi2_driver]
-name = "drv-stm32h7-spi-server"
-priority = 2
-max-sizes = {flash = 16384, ram = 4096}
-features = ["spi2", "h753"]
-uses = ["spi2"]
-start = true
-interrupts = {"spi2.irq" = 1}
-stacksize = 1000
-task-slots = ["sys"]
-
-[tasks.spi2_driver.config.spi]
-global_config = "spi2"
 
 [tasks.user_leds]
 name = "drv-user-leds"
@@ -61,12 +37,13 @@ priority = 2
 max-sizes = {flash = 2048, ram = 1024}
 start = true
 task-slots = ["sys"]
+notifications = ["timer"]
 
 [tasks.hiffy]
 name = "task-hiffy"
-features = ["h753", "stm32h7", "itm", "gpio", "spi"]
+features = ["h753", "stm32h7", "gpio", "spi"]
 priority = 3
-max-sizes = {flash = 16384, ram = 16384 }
+max-sizes = {flash = 32768, ram = 16384 }
 stacksize = 2048
 start = true
 task-slots = ["sys", "user_leds"]
@@ -75,13 +52,18 @@ task-slots = ["sys", "user_leds"]
 name = "task-net"
 stacksize = 3000
 priority = 3
-features = ["mgmt", "h753"]
+features = ["mgmt", "h753", "use-spi-core", "spi2"]
 max-sizes = {flash = 131072, ram = 16384, sram1 = 16384}
 sections = {eth_bulk = "sram1"}
-uses = ["eth", "eth_dma", "system_flash", "tim16"]
+uses = ["eth", "eth_dma", "tim16", "spi2"]
 start = true
-interrupts = {"eth.irq" = 0b1, "tim16.irq" = 0b10}
-task-slots = ["sys", "user_leds", { spi_driver = "spi2_driver" }]
+notifications = ["eth-irq", "mdio-timer-irq", "spi-irq", "wake-timer"]
+task-slots = ["sys", "user_leds", "jefe"]
+
+[tasks.net.interrupts]
+"eth.irq" = "eth-irq"
+"tim16.irq" = "mdio-timer-irq"
+"spi2.irq" = "spi-irq"
 
 [tasks.udpecho]
 name = "task-udpecho"
@@ -90,6 +72,7 @@ max-sizes = {flash = 16384, ram = 8192}
 stacksize = 4096
 start = true
 task-slots = ["net"]
+notifications = ["socket"]
 
 [tasks.idle]
 name = "task-idle"
@@ -107,15 +90,16 @@ outputs = [
 ]
 input = {port = "I", pin = 2, af = 5}
 
-[config.spi.spi2.devices.spi2_header]
+[config.spi.spi2.devices.ksz8463]
 mux = "port_i"
 cs = [{port = "I", pin = 0}]
 
 [config.net]
+# UDP ports in sockets below are assigned in oxidecomputer/oana
 
 [config.net.sockets.echo]
 kind = "udp"
-owner = {name = "udpecho", notification = 1}
+owner = {name = "udpecho", notification = "socket"}
 port = 7
 tx = { packets = 3, bytes = 1024 }
 rx = { packets = 3, bytes = 1024 }

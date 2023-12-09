@@ -1,25 +1,39 @@
 [package]
 name = "lpc55-update-server"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
+abi.path = "../../sys/abi"
+drv-caboose.path = "../../drv/caboose"
+drv-update-api.path = "../update-api/"
+drv-lpc55-update-api.path = "../lpc55-update-api/"
+ringbuf.path = "../../lib/ringbuf"
+stage0-handoff.path = "../../lib/stage0-handoff"
 userlib = {path = "../../sys/userlib", features = ["panic-messages"]}
-drv-update-api = { path = "../update-api/" }
-ringbuf = {path = "../../lib/ringbuf"}
-idol-runtime = {git = "https://github.com/oxidecomputer/idolatry.git"}
-num-traits = { version = "0.2.12", default-features = false }
-zerocopy = "0.6.1"
-hypocalls = {path = "../../lib/hypocalls"}
-cfg-if = "1"
+drv-lpc55-flash.path = "../lpc55-flash"
+drv-lpc55-sha256.path = "../lpc55-sha256"
+drv-lpc55-syscon-api.path = "../lpc55-syscon-api"
+task-jefe-api = { path = "../../task/jefe-api" }
+
+cfg-if.workspace = true
+hubpack.workspace = true
+idol-runtime.workspace = true
+lpc55-pac.workspace = true
+num-traits.workspace = true
+serde.workspace = true
+static_assertions.workspace = true
+tlvc.workspace = true
+zerocopy.workspace = true
 
 [build-dependencies]
-build-util = {path = "../../build/util"}
-idol = {git = "https://github.com/oxidecomputer/idolatry.git"}
+build-util = { path = "../../build/util" }
+idol = { workspace = true }
 
 # This section is here to discourage RLS/rust-analyzer from doing test builds,
 # since test builds don't work for cross compilation.
 [[bin]]
 name = "lpc55-update-server"
 test = false
+doctest = false
 bench = false

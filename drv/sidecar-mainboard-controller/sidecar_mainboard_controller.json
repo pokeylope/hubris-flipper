@@ -15,7 +15,7 @@
                     "inst_name": "ID0",
                     "lsb": 0,
                     "msb": 7,
-                    "reset": 0,
+                    "reset": 1,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
@@ -35,7 +35,7 @@
                     "inst_name": "ID1",
                     "lsb": 0,
                     "msb": 7,
-                    "reset": 0,
+                    "reset": 222,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
@@ -55,7 +55,7 @@
                     "inst_name": "ID2",
                     "lsb": 0,
                     "msb": 7,
-                    "reset": 0,
+                    "reset": 91,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
@@ -75,7 +75,7 @@
                     "inst_name": "ID3",
                     "lsb": 0,
                     "msb": 7,
-                    "reset": 0,
+                    "reset": 174,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
@@ -85,8 +85,248 @@
         },
         {
             "type": "reg",
-            "inst_name": "SCRATCHPAD",
+            "inst_name": "CS0",
             "addr_offset": 4,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "CS0",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "checksum[31..24]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "CS1",
+            "addr_offset": 5,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "CS1",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "checksum[23..16]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "CS2",
+            "addr_offset": 6,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "CS2",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "checksum[15..8]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "CS3",
+            "addr_offset": 7,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "CS3",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "checksum[7..0]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "VERSION0",
+            "addr_offset": 8,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "data",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "version[31..24]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "VERSION1",
+            "addr_offset": 9,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "data",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "version[23..16]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "VERSION2",
+            "addr_offset": 10,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "data",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "version[15..8]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "VERSION3",
+            "addr_offset": 11,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "data",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "version[7..0]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "SHA0",
+            "addr_offset": 12,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "data",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "sha[31..24]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "SHA1",
+            "addr_offset": 13,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "data",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "sha[23..16]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "SHA2",
+            "addr_offset": 14,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "data",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "sha[15..8]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "SHA3",
+            "addr_offset": 15,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "data",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "sha[7..0]"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "SCRATCHPAD",
+            "addr_offset": 16,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
@@ -105,8 +345,372 @@
         },
         {
             "type": "reg",
+            "inst_name": "FAN0_STATE",
+            "addr_offset": 32,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "ENABLE",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Drives FPGA_TO_FANx_HSC_EN. FPGA will clear if FANx_PRESENT not set."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "LED",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Drives FPGA_TO_FANx_LED_L (not actually active low)."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Debounced value of FANx_TO_FPGA_PRESENT_2V5."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PG",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Value of FANx_HSC_TO_FPGA_PG."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "POWER_FAULT",
+                    "lsb": 4,
+                    "msb": 4,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "PG was lost during normal operation."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PG_TIMED_OUT",
+                    "lsb": 5,
+                    "msb": 5,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "FANx_HSC_TO_FPGA_PG was not released within timeout period."
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "FAN1_STATE",
+            "addr_offset": 33,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "ENABLE",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Drives FPGA_TO_FANx_HSC_EN. FPGA will clear if FANx_PRESENT not set."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "LED",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Drives FPGA_TO_FANx_LED_L (not actually active low)."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Debounced value of FANx_TO_FPGA_PRESENT_2V5."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PG",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Value of FANx_HSC_TO_FPGA_PG."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "POWER_FAULT",
+                    "lsb": 4,
+                    "msb": 4,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "PG was lost during normal operation."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PG_TIMED_OUT",
+                    "lsb": 5,
+                    "msb": 5,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "FANx_HSC_TO_FPGA_PG was not released within timeout period."
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "FAN2_STATE",
+            "addr_offset": 34,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "ENABLE",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Drives FPGA_TO_FANx_HSC_EN. FPGA will clear if FANx_PRESENT not set."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "LED",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Drives FPGA_TO_FANx_LED_L (not actually active low)."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Debounced value of FANx_TO_FPGA_PRESENT_2V5."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PG",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Value of FANx_HSC_TO_FPGA_PG."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "POWER_FAULT",
+                    "lsb": 4,
+                    "msb": 4,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "PG was lost during normal operation."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PG_TIMED_OUT",
+                    "lsb": 5,
+                    "msb": 5,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "FANx_HSC_TO_FPGA_PG was not released within timeout period."
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "FAN3_STATE",
+            "addr_offset": 35,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "ENABLE",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Drives FPGA_TO_FANx_HSC_EN. FPGA will clear if FANx_PRESENT not set."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "LED",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Drives FPGA_TO_FANx_LED_L (not actually active low)."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Debounced value of FANx_TO_FPGA_PRESENT_2V5."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PG",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Value of FANx_HSC_TO_FPGA_PG."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "POWER_FAULT",
+                    "lsb": 4,
+                    "msb": 4,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "PG was lost during normal operation."
+                },
+                {
+                    "type": "field",
+                    "inst_name": "PG_TIMED_OUT",
+                    "lsb": 5,
+                    "msb": 5,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "FANx_HSC_TO_FPGA_PG was not released within timeout period."
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "FRONT_IO_STATE",
+            "addr_offset": 48,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "ENABLE",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail is enabled"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "GOOD",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail is operating nominally"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "FAULT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail experienced a fault"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "VRHOT",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the voltage regulator is experiencing a high temperature"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "STATE",
+                    "lsb": 4,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "State of the power rail according to the sequencer"
+                }
+            ]
+        },
+        {
+            "type": "reg",
             "inst_name": "TOFINO_SEQ_CTRL",
-            "addr_offset": 5,
+            "addr_offset": 256,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
@@ -148,7 +752,7 @@
         {
             "type": "reg",
             "inst_name": "TOFINO_SEQ_STATE",
-            "addr_offset": 6,
+            "addr_offset": 257,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
@@ -168,7 +772,7 @@
         {
             "type": "reg",
             "inst_name": "TOFINO_SEQ_STEP",
-            "addr_offset": 7,
+            "addr_offset": 258,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
@@ -176,7 +780,7 @@
                     "type": "field",
                     "inst_name": "STEP",
                     "lsb": 0,
-                    "msb": 7,
+                    "msb": 3,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
@@ -188,7 +792,7 @@
         {
             "type": "reg",
             "inst_name": "TOFINO_SEQ_ERROR",
-            "addr_offset": 8,
+            "addr_offset": 259,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
@@ -196,7 +800,7 @@
                     "type": "field",
                     "inst_name": "ERROR",
                     "lsb": 0,
-                    "msb": 7,
+                    "msb": 2,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
@@ -207,308 +811,432 @@
         },
         {
             "type": "reg",
-            "inst_name": "TOFINO_POWER_ENABLE",
-            "addr_offset": 9,
+            "inst_name": "TOFINO_SEQ_ERROR_STATE",
+            "addr_offset": 260,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
                 {
                     "type": "field",
-                    "inst_name": "VDD_1P8_EN",
+                    "inst_name": "STATE",
                     "lsb": 0,
-                    "msb": 0,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDD 1.8V Enable"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDD_CORE_EN",
-                    "lsb": 1,
-                    "msb": 1,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDD Core Enable"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDD_PCIE_EN",
-                    "lsb": 2,
                     "msb": 2,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDD 0.75V PCIe Enable"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDD_VDDT_EN",
-                    "lsb": 3,
-                    "msb": 3,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDD 0.9V VDDT Enable"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDDA_1P5_EN",
-                    "lsb": 4,
-                    "msb": 4,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDDA 1.5V Enable"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDDA_1P8_EN",
-                    "lsb": 5,
-                    "msb": 5,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDDA 1.8V Enable"
+                    "desc": "Sequencer state when error occured"
                 }
             ]
         },
         {
             "type": "reg",
-            "inst_name": "TOFINO_POWER_GOOD",
-            "addr_offset": 10,
+            "inst_name": "TOFINO_SEQ_ERROR_STEP",
+            "addr_offset": 261,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
                 {
                     "type": "field",
-                    "inst_name": "VDD_1P8_PG",
+                    "inst_name": "STEP",
                     "lsb": 0,
-                    "msb": 0,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDD 1.8V Power Good"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDD_CORE_PG",
-                    "lsb": 1,
-                    "msb": 1,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDD Core Power Good"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDD_PCIE_PG",
-                    "lsb": 2,
-                    "msb": 2,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDD 0.75V PCIe Power Good"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDD_VDDT_PG",
-                    "lsb": 3,
                     "msb": 3,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDD 0.9V VDDT Power Good"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDDA_1P5_PG",
-                    "lsb": 4,
-                    "msb": 4,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDDA 1.5V Power Good"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "VDDA_1P8_PG",
-                    "lsb": 5,
-                    "msb": 5,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "VDDA 1.8V Power Good"
+                    "desc": "Sequencing step when error occured"
                 }
             ]
         },
         {
             "type": "reg",
-            "inst_name": "TOFINO_POWER_FAULT",
-            "addr_offset": 11,
+            "inst_name": "TOFINO_POWER_VDD18_STATE",
+            "addr_offset": 262,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
                 {
                     "type": "field",
-                    "inst_name": "VDD_1P8_FAULT",
+                    "inst_name": "ENABLE",
                     "lsb": 0,
                     "msb": 0,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDD 1.8V Fault"
+                    "desc": "Flag indicating the power rail is enabled"
                 },
                 {
                     "type": "field",
-                    "inst_name": "VDD_CORE_FAULT",
+                    "inst_name": "GOOD",
                     "lsb": 1,
                     "msb": 1,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDD Core Fault"
+                    "desc": "Flag indicating the power rail is operating nominally"
                 },
                 {
                     "type": "field",
-                    "inst_name": "RESERVED1",
+                    "inst_name": "FAULT",
                     "lsb": 2,
                     "msb": 2,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "Reserved"
+                    "desc": "Flag indicating the power rail experienced a fault"
                 },
                 {
                     "type": "field",
-                    "inst_name": "VDD_VDDT_FAULT",
+                    "inst_name": "VRHOT",
                     "lsb": 3,
                     "msb": 3,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDD 0.9V VDDT Fault"
+                    "desc": "Flag indicating the voltage regulator is experiencing a high temperature"
                 },
                 {
                     "type": "field",
-                    "inst_name": "VDDA_1P5_FAULT",
+                    "inst_name": "STATE",
                     "lsb": 4,
-                    "msb": 4,
+                    "msb": 7,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDDA 1.5V Fault"
-                },
-                {
-                    "type": "field",
-                    "inst_name": "RESERVED2",
-                    "lsb": 5,
-                    "msb": 5,
-                    "reset": 0,
-                    "sw_access": "r",
-                    "se_onread": null,
-                    "se_onwrite": null,
-                    "desc": "Reserved"
+                    "desc": "State of the power rail according to the sequencer"
                 }
             ]
         },
         {
             "type": "reg",
-            "inst_name": "TOFINO_POWER_VRHOT",
-            "addr_offset": 12,
+            "inst_name": "TOFINO_POWER_VDDCORE_STATE",
+            "addr_offset": 263,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
                 {
                     "type": "field",
-                    "inst_name": "VDD_1P8_VRHOT",
+                    "inst_name": "ENABLE",
                     "lsb": 0,
                     "msb": 0,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDD 1.8V VRHOT"
+                    "desc": "Flag indicating the power rail is enabled"
                 },
                 {
                     "type": "field",
-                    "inst_name": "VDD_CORE_VRHOT",
+                    "inst_name": "GOOD",
                     "lsb": 1,
                     "msb": 1,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDD Core VRHOT"
+                    "desc": "Flag indicating the power rail is operating nominally"
                 },
                 {
                     "type": "field",
-                    "inst_name": "RESERVED1",
+                    "inst_name": "FAULT",
                     "lsb": 2,
                     "msb": 2,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "Reserved"
+                    "desc": "Flag indicating the power rail experienced a fault"
                 },
                 {
                     "type": "field",
-                    "inst_name": "VDD_VDDT_VRHOT",
+                    "inst_name": "VRHOT",
                     "lsb": 3,
                     "msb": 3,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDD 0.9V VDDT VRHOT"
+                    "desc": "Flag indicating the voltage regulator is experiencing a high temperature"
                 },
                 {
                     "type": "field",
-                    "inst_name": "VDDA_1P5_VRHOT",
+                    "inst_name": "STATE",
                     "lsb": 4,
-                    "msb": 4,
+                    "msb": 7,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDDA 1.5V VRHOT"
+                    "desc": "State of the power rail according to the sequencer"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "TOFINO_POWER_VDDPCIE_STATE",
+            "addr_offset": 264,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "ENABLE",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail is enabled"
                 },
                 {
                     "type": "field",
-                    "inst_name": "VDDA_1P8_VRHOT",
-                    "lsb": 5,
-                    "msb": 5,
+                    "inst_name": "GOOD",
+                    "lsb": 1,
+                    "msb": 1,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "VDDA 1.8V VRHOT"
+                    "desc": "Flag indicating the power rail is operating nominally"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "FAULT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail experienced a fault"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "VRHOT",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the voltage regulator is experiencing a high temperature"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "STATE",
+                    "lsb": 4,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "State of the power rail according to the sequencer"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "TOFINO_POWER_VDDT_STATE",
+            "addr_offset": 265,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "ENABLE",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail is enabled"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "GOOD",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail is operating nominally"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "FAULT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail experienced a fault"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "VRHOT",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the voltage regulator is experiencing a high temperature"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "STATE",
+                    "lsb": 4,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "State of the power rail according to the sequencer"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "TOFINO_POWER_VDDA15_STATE",
+            "addr_offset": 266,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "ENABLE",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail is enabled"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "GOOD",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail is operating nominally"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "FAULT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail experienced a fault"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "VRHOT",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the voltage regulator is experiencing a high temperature"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "STATE",
+                    "lsb": 4,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "State of the power rail according to the sequencer"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "TOFINO_POWER_VDDA18_STATE",
+            "addr_offset": 267,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "ENABLE",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail is enabled"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "GOOD",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail is operating nominally"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "FAULT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the power rail experienced a fault"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "VRHOT",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the voltage regulator is experiencing a high temperature"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "STATE",
+                    "lsb": 4,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "State of the power rail according to the sequencer"
                 }
             ]
         },
         {
             "type": "reg",
             "inst_name": "TOFINO_POWER_VID",
-            "addr_offset": 13,
+            "addr_offset": 268,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
@@ -550,7 +1278,7 @@
         {
             "type": "reg",
             "inst_name": "TOFINO_RESET",
-            "addr_offset": 14,
+            "addr_offset": 269,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
@@ -574,14 +1302,14 @@
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "PCIe link is in reset"
+                    "desc": "Tofino PCIe link is in reset"
                 }
             ]
         },
         {
             "type": "reg",
             "inst_name": "TOFINO_MISC",
-            "addr_offset": 15,
+            "addr_offset": 270,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
@@ -612,7 +1340,7 @@
         {
             "type": "reg",
             "inst_name": "PCIE_HOTPLUG_CTRL",
-            "addr_offset": 16,
+            "addr_offset": 271,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
@@ -625,71 +1353,379 @@
                     "sw_access": "w",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "Present"
+                    "desc": "Bit indicating Tofino Present"
                 },
                 {
                     "type": "field",
-                    "inst_name": "POWER_FAULT",
+                    "inst_name": "RESET",
                     "lsb": 1,
                     "msb": 1,
                     "reset": 0,
                     "sw_access": "w",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "Power Fault"
+                    "desc": "Bit indicating the desired state of Tofino PCIe Reset, valid if host override bit set"
                 },
                 {
                     "type": "field",
-                    "inst_name": "ALERT",
+                    "inst_name": "OVERRIDE_HOST_RESET",
                     "lsb": 2,
                     "msb": 2,
                     "reset": 0,
                     "sw_access": "w",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "Alert"
+                    "desc": "Override host PCIe Reset"
                 },
                 {
                     "type": "field",
-                    "inst_name": "RESET",
+                    "inst_name": "POWER_FAULT",
                     "lsb": 3,
                     "msb": 3,
                     "reset": 0,
                     "sw_access": "w",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "PCIe Reset"
+                    "desc": "Bit indicating the desired state of PCIe Power Fault, valid if sequencer override bit set"
                 },
                 {
                     "type": "field",
-                    "inst_name": "OVERRIDE_HOST_RESET",
+                    "inst_name": "OVERRIDE_SEQ_POWER_FAULT",
                     "lsb": 4,
                     "msb": 4,
                     "reset": 0,
                     "sw_access": "w",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "Override host PCIe Reset"
+                    "desc": "Override sequencer power fault"
                 }
             ]
         },
         {
             "type": "reg",
             "inst_name": "PCIE_HOTPLUG_STATUS",
-            "addr_offset": 17,
+            "addr_offset": 272,
             "regwidth": 8,
             "min_accesswidth": 8,
             "children": [
                 {
                     "type": "field",
-                    "inst_name": "HOST_RESET",
+                    "inst_name": "PRESENT",
                     "lsb": 0,
                     "msb": 0,
                     "reset": 0,
                     "sw_access": "r",
                     "se_onread": null,
                     "se_onwrite": null,
-                    "desc": "Host PCIe Reset"
+                    "desc": "State of PCIe Present signal"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "HOST_RESET",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "State of PCIe Reset signal"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "POWER_FAULT",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "State of PCIe Power Fault signal"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "TOFINO_DEBUG_PORT_BUFFER",
+            "addr_offset": 512,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "DATA",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "rw",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Send/receive buffer read/write port"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "TOFINO_DEBUG_PORT_STATE",
+            "addr_offset": 513,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "SEND_BUFFER_EMPTY",
+                    "lsb": 0,
+                    "msb": 0,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Send buffer empty"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "SEND_BUFFER_FULL",
+                    "lsb": 1,
+                    "msb": 1,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Send buffer full"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "RECEIVE_BUFFER_EMPTY",
+                    "lsb": 2,
+                    "msb": 2,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Receive buffer empty"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "RECEIVE_BUFFER_FULL",
+                    "lsb": 3,
+                    "msb": 3,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Receive buffer full"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "REQUEST_IN_PROGRESS",
+                    "lsb": 4,
+                    "msb": 4,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating the port is busy processing requests"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "ERROR_VALID",
+                    "lsb": 5,
+                    "msb": 5,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Flag indicating an I2C error occured"
+                },
+                {
+                    "type": "field",
+                    "inst_name": "ERROR_DETAILS",
+                    "lsb": 6,
+                    "msb": 6,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Field indicating the type of I2C error occured"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "IGNITION_CONTROLLERS_COUNT",
+            "addr_offset": 768,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "COUNT",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": null,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "The number of present/active Ignition Controllers"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "IGNITION_TARGETS_PRESENT0",
+            "addr_offset": 769,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT_SUMMARY0",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Byte 0 of Ignition Target Present summary"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "IGNITION_TARGETS_PRESENT1",
+            "addr_offset": 770,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT_SUMMARY1",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Byte 1 of Ignition Target Present summary"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "IGNITION_TARGETS_PRESENT2",
+            "addr_offset": 771,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT_SUMMARY2",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Byte 2 of Ignition Target Present summary"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "IGNITION_TARGETS_PRESENT3",
+            "addr_offset": 772,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT_SUMMARY3",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Byte 3 of Ignition Target Present summary"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "IGNITION_TARGETS_PRESENT4",
+            "addr_offset": 773,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT_SUMMARY4",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Byte 4 of Ignition Target Present summary"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "IGNITION_TARGETS_PRESENT5",
+            "addr_offset": 774,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT_SUMMARY5",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Byte 5 of Ignition Target Present summary"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "IGNITION_TARGETS_PRESENT6",
+            "addr_offset": 775,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT_SUMMARY6",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Byte 6 of Ignition Target Present summary"
+                }
+            ]
+        },
+        {
+            "type": "reg",
+            "inst_name": "IGNITION_TARGETS_PRESENT7",
+            "addr_offset": 776,
+            "regwidth": 8,
+            "min_accesswidth": 8,
+            "children": [
+                {
+                    "type": "field",
+                    "inst_name": "PRESENT_SUMMARY7",
+                    "lsb": 0,
+                    "msb": 7,
+                    "reset": 0,
+                    "sw_access": "r",
+                    "se_onread": null,
+                    "se_onwrite": null,
+                    "desc": "Byte 7 of Ignition Target Present summary"
                 }
             ]
         }

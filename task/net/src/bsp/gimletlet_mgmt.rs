@@ -2,8 +2,16 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{mgmt, miim_bridge::MiimBridge, pins};
-use drv_spi_api::Spi;
+#[cfg(not(all(feature = "ksz8463", feature = "mgmt")))]
+compile_error!("this BSP requires the ksz8463 and mgmt features");
+
+use crate::{
+    bsp_support::{self, Ksz8463},
+    mgmt,
+    miim_bridge::MiimBridge,
+    pins,
+};
+use drv_spi_api::SpiServer;
 use drv_stm32h7_eth as eth;
 use drv_stm32xx_sys_api::{Alternate, Port, Sys};
 use drv_user_leds_api::UserLeds;
@@ -18,7 +26,6 @@ use userlib::task_slot;
 use vsc7448_pac::{phy, types::PhyRegisterAddress};
 use vsc85xx::VscError;
 
-task_slot!(SPI, spi_driver);
 task_slot!(USER_LEDS, user_leds);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -80,57 +87,57 @@ enum Trace {
 }
 ringbuf!(Trace, 32, Trace::None);
 
-// This system wants to be woken periodically to do logging
-pub const WAKE_INTERVAL: Option<u64> = Some(500);
-
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn preinit() {
-    // Nothing to do here
-}
-
-pub fn configure_ethernet_pins(sys: &Sys) {
-    pins::RmiiPins {
-        refclk: Port::A.pin(1),
-        crs_dv: Port::A.pin(7),
-        tx_en: Port::G.pin(11),
-        txd0: Port::G.pin(13),
-        txd1: Port::G.pin(12),
-        rxd0: Port::C.pin(4),
-        rxd1: Port::C.pin(5),
-        af: Alternate::AF11,
-    }
-    .configure(sys);
-
-    pins::MdioPins {
-        mdio: Port::A.pin(2),
-        mdc: Port::C.pin(1),
-        af: Alternate::AF11,
-    }
-    .configure(sys);
-}
-
-pub struct Bsp {
+pub struct BspImpl {
     mgmt: mgmt::Bsp,
     leds: UserLeds,
 }
 
-impl Bsp {
-    pub fn new(eth: &eth::Ethernet, sys: &Sys) -> Self {
+impl bsp_support::Bsp for BspImpl {
+    // This system wants to be woken periodically to do logging
+    const WAKE_INTERVAL: Option<u64> = Some(500);
+
+    fn preinit() {}
+
+    fn configure_ethernet_pins(sys: &Sys) {
+        pins::RmiiPins {
+            refclk: Port::A.pin(1),
+            crs_dv: Port::A.pin(7),
+            tx_en: Port::G.pin(11),
+            txd0: Port::G.pin(13),
+            txd1: Port::G.pin(12),
+            rxd0: Port::C.pin(4),
+            rxd1: Port::C.pin(5),
+            af: Alternate::AF11,
+        }
+        .configure(sys);
+
+        pins::MdioPins {
+            mdio: Port::A.pin(2),
+            mdc: Port::C.pin(1),
+            af: Alternate::AF11,
+        }
+        .configure(sys);
+    }
+
+    fn new(eth: &eth::Ethernet, sys: &Sys) -> Self {
         let leds = drv_user_leds_api::UserLeds::from(USER_LEDS.get_task_id());
 
         // Turn on an LED to indicate that we're configuring
         leds.led_off(0).unwrap();
         leds.led_on(3).unwrap();
 
+        let spi = bsp_support::claim_spi(sys);
+        let ksz8463_dev = spi.device(drv_spi_api::devices::KSZ8463);
+
         let mgmt = mgmt::Config {
             power_en: None,
             slow_power_en: false,
-            power_good: None,
+            power_good: &[],
             pll_lock: None,
 
-            // SPI device is based on ordering in app.toml
-            ksz8463_spi: Spi::from(SPI.get_task_id()).device(0),
+            ksz8463: Ksz8463::new(ksz8463_dev),
             ksz8463_nrst: Port::A.pin(9),
             ksz8463_rst_type: mgmt::Ksz8463ResetSpeed::Slow,
 
@@ -152,7 +159,7 @@ impl Bsp {
         Self { mgmt, leds }
     }
 
-    pub fn wake(&self, eth: &eth::Ethernet) {
+    fn wake(&self, eth: &eth::Ethernet) {
         // Run the BSP wake function, which logs summarized data to a different
         // ringbuf; we'll still do verbose logging of full registers below.
         self.mgmt.wake(eth);
@@ -259,7 +266,7 @@ impl Bsp {
         }
     }
 
-    pub fn phy_read(
+    fn phy_read(
         &mut self,
         port: u8,
         reg: PhyRegisterAddress<u16>,
@@ -268,7 +275,7 @@ impl Bsp {
         self.mgmt.phy_read(port, reg, eth)
     }
 
-    pub fn phy_write(
+    fn phy_write(
         &mut self,
         port: u8,
         reg: PhyRegisterAddress<u16>,
@@ -278,18 +285,18 @@ impl Bsp {
         self.mgmt.phy_write(port, reg, value, eth)
     }
 
-    pub fn ksz8463(&self) -> &ksz8463::Ksz8463 {
+    fn ksz8463(&self) -> &Ksz8463 {
         &self.mgmt.ksz8463
     }
 
-    pub fn management_link_status(
+    fn management_link_status(
         &self,
         eth: &crate::eth::Ethernet,
     ) -> Result<ManagementLinkStatus, MgmtError> {
         self.mgmt.management_link_status(eth)
     }
 
-    pub fn management_counters(
+    fn management_counters(
         &self,
         eth: &crate::eth::Ethernet,
     ) -> Result<ManagementCounters, MgmtError> {

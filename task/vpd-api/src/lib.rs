@@ -13,15 +13,23 @@ use userlib::*;
 #[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq, IdolError)]
 pub enum VpdError {
     InvalidDevice = 1,
-    NotPresent = 2,
-    DeviceError = 3,
-    Unavailable = 4,
-    DeviceTimeout = 5,
-    DeviceOff = 6,
-    BadAddress = 7,
-    BadBuffer = 8,
-    BadRead = 9,
-    BadWrite = 10,
+    NotPresent,
+    DeviceError,
+    Unavailable,
+    DeviceTimeout,
+    DeviceOff,
+    BadAddress,
+    BadBuffer,
+    BadRead,
+    BadWrite,
+    BadLock,
+    NotImplemented,
+    IsLocked,
+    PartiallyLocked,
+    AlreadyLocked,
+
+    #[idol(server_death)]
+    ServerRestarted,
 }
 
 impl From<ResponseCode> for VpdError {
@@ -31,7 +39,7 @@ impl From<ResponseCode> for VpdError {
             ResponseCode::NoRegister => VpdError::Unavailable,
             ResponseCode::BusLocked
             | ResponseCode::BusLockedMux
-            | ResponseCode::ControllerLocked => VpdError::DeviceTimeout,
+            | ResponseCode::ControllerBusy => VpdError::DeviceTimeout,
             _ => VpdError::DeviceError,
         }
     }

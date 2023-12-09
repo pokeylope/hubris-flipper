@@ -4,18 +4,22 @@
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 
 use crate::config::Config;
 
 mod auxflash;
+mod caboose_pos;
 mod clippy;
 mod config;
 mod dist;
 mod elf;
 mod flash;
+mod graph;
 mod humility;
+mod lsp;
+mod print;
 mod sizes;
 mod task_slot;
 
@@ -144,6 +148,56 @@ enum Xtask {
     TaskSlots {
         /// Path to task executable
         task_bin: PathBuf,
+    },
+
+    /// Generate a graph of task_slot dependencies ordered by priority.
+    ///
+    /// Priority inversions are denoted by thick red arrows.
+    /// Normal task_slot dependencies are thin green arrows.
+    /// Example:
+    ///
+    ///   cargo xtask graph -o app.dot $APP_TOML;
+    ///   dot -Tsvg app.dot > app.svg;
+    ///   xdg-open app.xvg
+    Graph {
+        /// Output file for Graphviz dot syntax graph.
+        #[clap(short, long)]
+        output: PathBuf,
+        /// Path to the image configuration file, in TOML.
+        cfg: PathBuf,
+    },
+
+    /// Print out information related to the build.
+    ///
+    /// Currently only useful to print the archive path, but may grow over time.
+    Print {
+        /// Path to the image configuration file, in TOML.
+        cfg: PathBuf,
+
+        /// Print the path to the archive
+        #[clap(long)]
+        archive: bool,
+
+        /// If there are multiple possible images, print this one
+        #[clap(long)]
+        image_name: Option<String>,
+
+        /// Print the expanded configuration
+        #[clap(long)]
+        expanded_config: bool,
+    },
+
+    /// Print a JSON blob with configuration info for `rust-analyzer`
+    Lsp {
+        /// Existing LSP clients.
+        ///
+        /// These should be JSON-encoded strings which can be parsed into an
+        /// `LspClient`.
+        #[clap(short, value_parser)]
+        clients: Vec<lsp::LspClient>,
+
+        /// Path to a Rust source file
+        file: PathBuf,
     },
 }
 
@@ -298,6 +352,21 @@ fn run(xtask: Xtask) -> Result<()> {
         }
         Xtask::TaskSlots { task_bin } => {
             task_slot::dump_task_slot_table(&task_bin)?;
+        }
+        Xtask::Graph { output, cfg } => {
+            graph::task_graph(&cfg, &output)?;
+        }
+        Xtask::Print {
+            cfg,
+            archive,
+            image_name,
+            expanded_config,
+        } => {
+            print::run(&cfg, archive, image_name, expanded_config)
+                .context("could not print information about the build")?;
+        }
+        Xtask::Lsp { clients, file } => {
+            lsp::run(&file, &clients)?;
         }
     }
 

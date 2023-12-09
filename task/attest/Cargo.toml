@@ -1,0 +1,35 @@
+[package]
+name = "task-attest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arrayvec.workspace = true
+crypto-common = { workspace = true }
+lib-dice = { path = "../../lib/dice" }
+hubpack = { workspace = true }
+idol-runtime = { workspace = true }
+mutable-statics = { path = "../../lib/mutable-statics" }
+num-traits = { workspace = true }
+ringbuf = { path = "../../lib/ringbuf" }
+serde = { workspace = true }
+serde_with = { version = "3.3.0", default-features = false, features = ["macros"] }
+stage0-handoff = { path = "../../lib/stage0-handoff" }
+attest-api = { path = "../attest-api" }
+sha3 = { workspace = true }
+unwrap-lite = { path = "../../lib/unwrap-lite" }
+userlib = { path = "../../sys/userlib", features = ["panic-messages"] }
+zerocopy = { workspace = true }
+
+[build-dependencies]
+anyhow.workspace = true
+idol.workspace = true
+serde.workspace = true
+
+build-util = { path = "../../build/util" }
+
+[[bin]]
+name = "task-attest"
+test = false
+doctest = false
+bench = false

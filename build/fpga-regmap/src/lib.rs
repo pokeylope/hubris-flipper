@@ -23,11 +23,18 @@ enum Node {
         inst_name: String,
         lsb: usize,
         msb: usize,
+        encode: Option<Vec<EnumEncode>>,
     },
     Mem {
         inst_name: String,
         addr_offset: usize,
     },
+}
+
+#[derive(Debug, Deserialize)]
+struct EnumEncode {
+    name: String,
+    value: u8,
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -91,6 +98,7 @@ fn build_addr_map(node: &Node, output: &mut String) {
     writeln!(
         output,
         "\
+#[derive(Copy, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum Addr {{"
@@ -110,6 +118,20 @@ impl From<Addr> for u16 {{
 }}"
     )
     .unwrap();
+
+    writeln!(
+        output,
+        "
+impl Addr {{
+    /// Returns true iff this `Addr` immediately precedes the parameter,
+    /// which can be useful to statically assert that multibyte reads will
+    /// read the desired registers.
+    pub const fn precedes(self, other: Addr) -> bool {{
+        self as u16 + 1 == other as u16
+    }}
+}}"
+    )
+    .unwrap();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -120,6 +142,7 @@ fn write_reg_fields(children: &[Node], prefix: &str, output: &mut String) {
             inst_name,
             lsb,
             msb,
+            encode,
         } = child
         {
             let nbits = *msb - *lsb + 1;
@@ -132,6 +155,31 @@ fn write_reg_fields(children: &[Node], prefix: &str, output: &mut String) {
 {prefix}        pub const {inst_name}: u8 = 0b{mask:08b};",
             )
             .unwrap();
+            // Deal with optional encoded Enums on this field
+            match encode {
+                Some(x) => {
+                    writeln!(
+                        output,
+                        "
+{prefix}        use num_derive::{{ToPrimitive, FromPrimitive}};
+{prefix}        #[derive(Copy, Clone, Eq, PartialEq, FromPrimitive, ToPrimitive)]
+{prefix}        #[allow(dead_code)]
+{prefix}        #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
+{prefix}        pub enum Encoded {{"
+                    )
+                    .unwrap();
+                    for item in x {
+                        writeln!(
+                            output,
+                            "{prefix}            {0} = {1:#04x},",
+                            item.name, item.value
+                        )
+                        .unwrap();
+                    }
+                    writeln!(output, "{prefix}        }}").unwrap();
+                }
+                None => {}
+            }
         } else {
             panic!("unexpected non-Field: {child:?}");
         }
@@ -225,7 +273,9 @@ pub mod Reg {{"
 
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn fpga_regs(regs: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub fn fpga_regs(
+    regs: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let mut output = String::new();
 
     let node: Node = serde_json::from_str(regs)?;

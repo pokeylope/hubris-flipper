@@ -1,6 +1,6 @@
 # Hubris
 
-[![build](https://github.com/oxidecomputer/hubris/workflows/build/badge.svg)](https://github.com/oxidecomputer/hubris/actions?query=workflow%3Abuild)
+![dist](https://github.com/oxidecomputer/hubris/actions/workflows/dist.yml/badge.svg)
 
 Hubris is a microcontroller operating environment designed for deeply-embedded
 systems with reliability requirements. Its design was initially proposed in
@@ -21,12 +21,18 @@ The repo is laid out as follows.
 
 - `build/` contains the build system and supporting crates.
 
+- `chip/` contains peripheral definitions and debugging support files for
+  individual microcontrollers.
+
 - `doc/` contains developer documentation.
 
 - `drv/` contains drivers, a mix of simple driver lib crates and fully-fledged
   server bin crates. Current convention is that `drv/SYSTEM-DEVICE` is the
   driver for `DEVICE` on `SYSTEM` (where `SYSTEM` is usually an SoC name),
   whereas `drv/SYSTEM-DEVICE-server` is the server bin crate.
+
+- `idl/` contains interface definitions written in
+  [Idol](https://github.com/oxidecomputer/idolatry)
 
 - `lib/` contains assorted utility libraries we've written. If you need to make
   a reusable crate that doesn't fit into one of the other directories, it
@@ -48,6 +54,9 @@ The repo is laid out as follows.
 - `test/` contains the test framework and binary crates for building it for
   various boards.
 
+- `website/` contains the source code for the
+  [hubris website](https://hubris.oxide.computer/)
+
 # Developing
 
 We currently support Linux and Windows as first-tier platforms. macOS is also
@@ -57,7 +66,7 @@ support and a continuous build for Illumos or macOS, we'd love the help.
 
 To submit changes for review, push them to a branch in a fork and submit a pull
 request to merge that branch into `master`. For details, see
-[`CONTRIBUING.md`](CONTRIBUTING.md).
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Prereqs
 
@@ -84,10 +93,9 @@ You will need:
 - [libfdti1](https://www.intra2net.com/en/developer/libftdi/), found
   as `libftdi1-dev` or similar.
 
-- `arm-none-eabi-objcopy` and `arm-none-eabi-gdb`, typically from your system's
-  package manager using package names like
-  `arm-none-eabi-binutils`/`binutils-arm-none-eabi` and
-  `arm-none-eabi-gdb`/`gdb-multiarch`.  macOS users can run
+- If you will be running GDB, you should install `arm-none-eabi-gdb`.  This is
+  typically from your system's package manager with a package name like
+  `arm-none-eabi-gdb` or `gdb-multiarch`.  macOS users can run
   `brew install --cask gcc-arm-embedded` to install the
   [official ARM binaries](https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/gnu-rm).
 
@@ -96,6 +104,7 @@ You will need:
   file present in the root of this repository; if you run the following command
   verbatim to install Humility, do so from a different directory:
   - `cargo install --git https://github.com/oxidecomputer/humility.git --locked humility`
+    - Requires `cargo-readme` as a dependency: `cargo install cargo-readme`
 
 ### Windows
 
@@ -171,6 +180,154 @@ more tasks in the context of a particular image:
 $ cargo xtask clippy app/gimletlet/app.toml ping pong
 ```
 
+## Integrating with `rust-analyzer`
+The Hubris build system will not work with `rust-analyzer` out of the box.
+
+However, `cargo xtask lsp` is here to help: it takes as its argument a Rust
+file, and returns JSON-encoded configuration for how to set up `rust-analyzer`.
+
+To use this data, some editor configuration is required!
+
+(we haven't made plugins yet, but it would certainly be possible)
+
+Using Neovim and [`rust-tools`](https://github.com/simrat39/rust-tools.nvim),
+here's an example configuration:
+
+```lua
+-- monkeypatch rust-tools to correctly detect our custom rust-analyzer
+require'rust-tools.utils.utils'.is_ra_server = function (client)
+  local name = client.name
+  local target = "rust_analyzer"
+  return string.sub(client.name, 1, string.len(target)) == target
+    or client.name == "rust_analyzer-standalone"
+end
+
+-- Configure LSP through rust-tools.nvim plugin, with lots of bonus
+-- content for Hubris compatibility
+local cache = {}
+local clients = {}
+require'rust-tools'.setup{
+  tools = { -- rust-tools options
+    autoSetHints = true,
+    inlay_hints = {
+      show_parameter_hints = false,
+      parameter_hints_prefix = "",
+      other_hints_prefix = "",
+      -- do other configuration here as desired
+    },
+  },
+
+  server = {
+    on_new_config = function(new_config, new_root_dir)
+      local bufnr = vim.api.nvim_get_current_buf()
+      local bufname = vim.api.nvim_buf_get_name(bufnr)
+      local dir = new_config.root_dir()
+      if string.find(dir, "hubris") then
+        -- Run `xtask lsp` for the target file, which gives us a JSON
+        -- dictionary with bonus configuration.
+        local prev_cwd = vim.fn.getcwd()
+        vim.cmd("cd " .. dir)
+        local cmd = dir .. "/target/debug/xtask lsp "
+        -- Notify `xtask lsp` of existing clients in the CLI invocation,
+        -- so it can check against them first (which would mean a faster
+        -- attach)
+        for _,v in pairs(clients) do
+          local c = vim.fn.escape(vim.json.encode(v), '"')
+          cmd = cmd .. '-c"' .. c .. '" '
+        end
+        local handle = io.popen(cmd .. bufname)
+        handle:flush()
+        local result = handle:read("*a")
+        handle:close()
+        vim.cmd("cd " .. prev_cwd)
+
+        -- If `xtask` doesn't know about `lsp`, then it will print an error to
+        -- stderr and return nothing on stdout.
+        if result == "" then
+          vim.notify("recompile `xtask` for `lsp` support", vim.log.levels.WARN)
+        end
+
+        -- If the given file should be handled with special care, then
+        -- we give the rust-analyzer client a custom name (to prevent
+        -- multiple buffers from attaching to it), then cache the JSON in
+        -- a local variable for use in `on_attach`
+        local json = vim.json.decode(result)
+        if json["Ok"] ~= nil then
+          new_config.name = "rust_analyzer_" .. json.Ok.hash
+          cache[bufnr] = json
+          table.insert(clients, {toml = json.Ok.app, task = json.Ok.task})
+        else
+          -- TODO:
+          -- vim.notify(vim.inspect(json.Err), vim.log.levels.ERROR)
+        end
+      end
+    end,
+
+    on_attach = function(client, bufnr)
+      local json = cache[bufnr]
+      if json ~= nil then
+        local config = vim.deepcopy(client.config)
+        local ra = config.settings["rust-analyzer"]
+        -- Do rust-analyzer builds in a separate folder to avoid blocking
+        -- the main build with a file lock.
+        table.insert(json.Ok.buildOverrideCommand, "--target-dir")
+        table.insert(json.Ok.buildOverrideCommand, "target/rust-analyzer")
+        ra.cargo = {
+          extraEnv = json.Ok.extraEnv,
+          features = json.Ok.features,
+          noDefaultFeatures = true,
+          target = json.Ok.target,
+          buildScripts = {
+            overrideCommand = json.Ok.buildOverrideCommand,
+          },
+        }
+        ra.check = {
+          overrideCommand = json.Ok.buildOverrideCommand,
+        }
+        config.lspinfo = function()
+          return { "Hubris app:      " .. json.Ok.app,
+                   "Hubris task:     " .. json.Ok.task }
+        end
+        client.config = config
+      end
+    end,
+
+    settings = {
+      ["rust-analyzer"] = {
+        -- enable clippy on save
+        checkOnSave = {
+          command = "clippy",
+          extraArgs = { '--target-dir', 'target/rust-analyzer' },
+        },
+        diagnostics = {
+          disabled = {"inactive-code"},
+        },
+      }
+    }
+  },
+}
+end
+```
+
+### What's going on here?
+When a new LSP configuration is created (`on_new_config`), we run `cargo
+xtask lsp` on the target file.  The JSON configuration includes a hash of
+the configuration; we use that hash to modify the name of the client from
+`rust_analyzer` to `rust_analyzer_$HASH`.  This prevents Neovim from
+attempting to reuse an existing client, which are normally deduplicated by
+client name and workspace root directory; in Hubris, we want multiple clients
+coexisting with same workspace root, so they need different names.  Then, we
+stash the rest of the configuration in a local variable (`cache`), and record
+the existence of this client in `clients`.
+
+When attaching to the LSP, we try to pull the configuration out of `cache`.  If
+one exists, then we know we're dealing with a Hubris buffer; copy over relevant
+portions of the configuration.
+
+Note that this does not compile `xtask` for you; it assumes it already exists
+in `target/debug/xtask`.  This should be true if you're using Hubris regularly,
+and saves significant amounts of time when opening a new file.
+
 ## Adding a task
 
 To create your own task, the easiest method is:
@@ -191,6 +348,43 @@ priority = 1
 requires = {flash = 1024, ram = 1024}
 start = true
 ```
+
+## Graphing task relationships and priorities
+
+A graph can be generated that show the relationships of the various tasks
+and their priorities. The resulting file is in [Graphviz](https://graphviz.org/)'s
+`dot` format. `Dot` source [can be included](https://docs.asciidoctor.org/diagram-extension/latest/) in [Asciidoctor](https://asciidoctor.org) source
+or rendered to a variety of formats.
+
+To create and view an SVG graph for `gimletlet` on Ubuntu, ensure that the `graphviz` package is installed. Then generate the graph:
+
+```console
+$ cargo xtask graph -o gimletlet.dot app/gimletlet/app.toml
+$ dot -Tsvg gimletlet.dot > gimletlet.svg
+$ xdg-open gimletlet.svg
+```
+
+### Generating all graphs under Linux
+
+Bash commands to generate all graphs:
+
+```console
+  APPS=( $(find app -name '*.toml' ! -name Cargo.toml) )
+  for app in "${APPS[@]}"
+  do
+    out=$(basename ${app//\//_} .toml).dot
+    svg=$(basename $out .dot).svg
+    cargo xtask graph -o $out $app
+    dot -Tsvg $out > $svg
+  done
+  first="${APPS[0]}"
+  out="$(basename ${first//\//_} .toml).dot"
+  svg="$(basename $out .dot).svg"
+  xdg-open "${svg}"
+```
+
+If `eog` is the default viewer, opening the first SVG in a directory will
+allow cycling through all of the available graphs using the same window.
 
 # Using Hubris
 Hubris is tightly coupled to its debugger,
@@ -273,7 +467,7 @@ this.  `humility test` itself is most easily run via `cargo xtask test`, which
 runs the equivalent of `cargo xtask dist`, `cargo xtask flash`
 and `cargo xtask humility test`.  The exact invocation depends on the board:
 
-- LPCXpresso55S69: `cargo xtask test test test/tests-lpc55/app.toml`
+- LPCXpresso55S69: `cargo xtask test test/tests-lpc55xpresso/app.toml`
 - STM32F3 Discovery board: `cargo xtask test test/tests-stm32fx/app-f3.toml`  
   **Note: for this board, SB10 must be soldered closed for ITM to work**
 - STM32F4 Discovery board: `cargo xtask test test/tests-stm32fx/app.toml`

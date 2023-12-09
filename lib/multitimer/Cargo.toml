@@ -1,0 +1,10 @@
+[package]
+name = "multitimer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+enum-map = { workspace = true }
+
+[target.'cfg(target_os = "none")'.dependencies]
+userlib = {path = "../../sys/userlib"}

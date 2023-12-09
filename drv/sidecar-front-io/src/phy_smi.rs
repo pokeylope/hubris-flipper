@@ -9,6 +9,13 @@ use drv_fpga_api::{FpgaError, FpgaUserDesign, WriteOp};
 use vsc85xx::{PhyRw, VscError};
 use zerocopy::{byteorder, AsBytes, FromBytes, Unaligned, U16};
 
+#[derive(Copy, Clone, Eq, Debug, PartialEq)]
+pub enum PhyOscState {
+    Unknown,
+    Bad,
+    Good,
+}
+
 pub struct PhySmi {
     fpga: FpgaUserDesign,
 
@@ -62,7 +69,7 @@ impl PhySmi {
     }
 
     #[inline]
-    pub fn set_phy_coma_mode(&self, asserted: bool) -> Result<(), FpgaError> {
+    pub fn set_coma_mode(&self, asserted: bool) -> Result<(), FpgaError> {
         self.fpga.write(
             WriteOp::from(asserted),
             Addr::VSC8562_PHY_CTRL,
@@ -71,7 +78,7 @@ impl PhySmi {
     }
 
     #[inline]
-    pub fn phy_powered_up_and_ready(&self) -> Result<bool, FpgaError> {
+    pub fn powered_up_and_ready(&self) -> Result<bool, FpgaError> {
         let status: u8 = self.fpga.read(Addr::VSC8562_PHY_STATUS)?;
         Ok((status & Reg::VSC8562::PHY_STATUS::READY) != 0)
     }
@@ -87,6 +94,28 @@ impl PhySmi {
             // busy-loop, because MDIO is fast
         }
         Ok(())
+    }
+
+    pub fn osc_state(&self) -> Result<PhyOscState, FpgaError> {
+        let phy_osc: u8 = self.fpga.read(Addr::VSC8562_PHY_OSC)?;
+
+        let good = phy_osc & Reg::VSC8562::PHY_OSC::GOOD != 0;
+        let valid = phy_osc & Reg::VSC8562::PHY_OSC::VALID != 0;
+
+        Ok(match (valid, good) {
+            (false, _) => PhyOscState::Unknown,
+            (true, false) => PhyOscState::Bad,
+            (true, true) => PhyOscState::Good,
+        })
+    }
+
+    pub fn set_osc_good(&self, good: bool) -> Result<(), FpgaError> {
+        self.fpga.write(
+            WriteOp::Write,
+            Addr::VSC8562_PHY_OSC,
+            Reg::VSC8562::PHY_OSC::VALID
+                | if good { Reg::VSC8562::PHY_OSC::GOOD } else { 0 },
+        )
     }
 
     #[inline(never)]
@@ -141,7 +170,7 @@ impl PhySmi {
         }
 
         self.fpga
-            .write(WriteOp::Write, Addr::VSC8562_PHY_SMI_WDATA_H, request)
+            .write(WriteOp::Write, Addr::VSC8562_PHY_SMI_WDATA0, request)
     }
 }
 
@@ -162,7 +191,7 @@ impl PhyRw for PhySmi {
 #[derive(AsBytes, FromBytes, Unaligned)]
 #[repr(C)]
 struct SmiWriteRequest {
-    wdata: U16<byteorder::BigEndian>,
+    wdata: U16<byteorder::LittleEndian>,
     phy: u8,
     reg: u8,
     ctrl: u8,
@@ -180,5 +209,5 @@ struct SmiReadRequest {
 #[repr(C)]
 struct SmiReadData {
     status: u8,
-    rdata: U16<byteorder::BigEndian>,
+    rdata: U16<byteorder::LittleEndian>,
 }

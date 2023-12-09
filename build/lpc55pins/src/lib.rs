@@ -117,11 +117,14 @@ impl ToTokens for PinConfig {
 }
 
 pub fn codegen(pins: Vec<PinConfig>) -> Result<()> {
-    let out_dir = std::env::var("OUT_DIR")?;
-    let dest_path = std::path::Path::new(&out_dir).join("pin_config.rs");
-    let mut file = std::fs::File::create(&dest_path)?;
+    let out_dir = build_util::out_dir();
+    let dest_path = out_dir.join("pin_config.rs");
+    let mut file = std::fs::File::create(dest_path)?;
 
     let mut buf = BufWriter::new(Vec::new());
+    if pins.iter().any(|p| p.name.is_some()) {
+        writeln!(&mut buf, "use drv_lpc55_gpio_api::Pin;")?;
+    }
     writeln!(
         &mut file,
         "fn setup_pins(task : TaskId) -> Result<(), ()> {{"
@@ -131,7 +134,7 @@ pub fn codegen(pins: Vec<PinConfig>) -> Result<()> {
     for p in pins {
         writeln!(&mut file, "iocon.iocon_configure(")?;
         writeln!(&mut file, "{}", p.to_token_stream())?;
-        writeln!(&mut file, ").unwrap_lite();")?;
+        writeln!(&mut file, ");")?;
         match p.direction {
             None => (),
             Some(d) => {
@@ -142,7 +145,7 @@ pub fn codegen(pins: Vec<PinConfig>) -> Result<()> {
                 } else {
                     writeln!(&mut file, "Direction::Input")?;
                 }
-                writeln!(&mut file, ").unwrap_lite();")?;
+                writeln!(&mut file, ");")?;
             }
         }
         match p.name {

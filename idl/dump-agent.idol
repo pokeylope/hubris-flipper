@@ -1,0 +1,87 @@
+// Dump Agent API
+
+Interface(
+    name: "DumpAgent",
+    ops: {
+        "read_dump": (
+            doc: "Fetch the 256 bytes from the dump at the specified offset from the specified area",
+            args: {
+                "index": "u8",
+                "offset": "u32",
+            },
+            reply: Result(
+                ok: "[u8; DUMP_READ_SIZE]",
+                err: CLike("DumpAgentError"),
+            ),
+        ),
+        "get_dump_area": (
+            doc: "Return information associated with the specified dump area.",
+            args: {
+                "index": "u8",
+            },
+            reply: Result(
+                ok: "DumpArea",
+                err: CLike("DumpAgentError"),
+            ),
+            encoding: Hubpack,
+        ),
+        "initialize_dump": (
+            doc: "Initialize dump context, overwriting any taken dump",
+            reply: Result(
+                ok: "()",
+                err: CLike("DumpAgentError"),
+            ),
+        ),
+        "add_dump_segment": (
+            doc: "Add a segment to dump",
+            args: {
+                "address": "u32",
+                "length": "u32",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("DumpAgentError"),
+            ),
+        ),
+        "take_dump": (
+            doc: "Take dump",
+            reply: Result(
+                ok: "()",
+                err: CLike("DumpAgentError"),
+            ),
+        ),
+        "dump_task": (
+            doc: "Dump a single task, without the external dumper",
+            args: {
+                "task_index": "u32",
+            },
+            reply: Result(
+                ok: "u8",
+                err: CLike("DumpAgentError"),
+            ),
+        ),
+        "dump_task_region": (
+            doc: "Dump a region from single task, without the external dumper",
+            args: {
+                "task_index": "u32",
+                "start": "u32",
+                "length": "u32",
+            },
+            reply: Result(
+                ok: "u8",
+                err: CLike("DumpAgentError"),
+            ),
+        ),
+        "reinitialize_dump_from": (
+            description: "reinitializes the dump memory starting at the given area",
+            args: {
+                "index": "u8",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("DumpAgentError"),
+            ),
+            encoding: Hubpack,
+        ),
+    },
+)

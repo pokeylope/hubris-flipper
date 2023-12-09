@@ -13,17 +13,36 @@ use zerocopy::{byteorder, AsBytes, Unaligned, U16};
 
 use drv_fpga_api::{BitstreamType, DeviceState, FpgaError, WriteOp};
 use drv_fpga_devices::{ecp5, Fpga, FpgaBitstream, FpgaUserDesign};
-use drv_spi_api::Spi;
+use drv_spi_api::SpiServer;
 use drv_stm32xx_sys_api::{self as sys_api, Sys};
 use idol_runtime::{ClientError, Leased, LenLimit, R, W};
 
 task_slot!(SYS, sys);
-task_slot!(SPI, spi_driver);
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "front_io")] {
         task_slot!(I2C, i2c_driver);
         include!(concat!(env!("OUT_DIR"), "/i2c_config.rs"));
+    }
+}
+
+cfg_if::cfg_if! {
+    // Select local vs server SPI communication
+    if #[cfg(feature = "use-spi-core")] {
+        /// Claims the SPI core.
+        ///
+        /// This function can only be called once, and will panic otherwise!
+        pub fn claim_spi(sys: &sys_api::Sys)
+            -> drv_stm32h7_spi_server_core::SpiServerCore
+        {
+            drv_stm32h7_spi_server_core::declare_spi_core!(
+                sys.clone(), notifications::SPI_IRQ_MASK)
+        }
+    } else {
+        pub fn claim_spi(_sys: &sys_api::Sys) -> drv_spi_api::Spi {
+            task_slot!(SPI, spi_driver);
+            drv_spi_api::Spi::from(SPI.get_task_id())
+        }
     }
 }
 
@@ -42,13 +61,19 @@ ringbuf!(Trace, 64, Trace::None);
 #[export_name = "main"]
 fn main() -> ! {
     let sys = Sys::from(SYS.get_task_id());
-    let configuration_port = Spi::from(SPI.get_task_id()).device(0);
-    let user_design = Spi::from(SPI.get_task_id()).device(1);
+    let spi = claim_spi(&sys);
 
     cfg_if::cfg_if! {
-        if #[cfg(all(target_board = "sidecar-a", feature = "mainboard", feature = "front_io"))] {
+        if #[cfg(all(feature = "mainboard", feature = "front_io"))] {
             compile_error!("Cannot enable both mainboard and front_io simultaneously");
-        } else if #[cfg(all(target_board = "sidecar-a", feature = "mainboard"))] {
+        } else if #[cfg(all(any(target_board = "sidecar-b",
+                                target_board = "sidecar-c"),
+                            feature = "mainboard"))] {
+            let configuration_port =
+                spi.device(drv_spi_api::devices::ECP5_MAINBOARD_FPGA);
+            let user_design =
+                spi.device(drv_spi_api::devices::ECP5_MAINBOARD_USER_DESIGN);
+
             let driver = drv_fpga_devices::ecp5_spi::Ecp5UsingSpi {
                 sys,
                 done: sys_api::Port::J.pin(15),
@@ -62,7 +87,14 @@ fn main() -> ! {
             driver.configure_gpio();
 
             let devices = [ecp5::Ecp5::new(driver)];
-        } else if #[cfg(all(target_board = "sidecar-a", feature = "front_io"))] {
+        } else if #[cfg(all(any(target_board = "sidecar-b",
+                                target_board = "sidecar-c"),
+                            feature = "front_io"))] {
+            let configuration_port =
+                spi.device(drv_spi_api::devices::ECP5_FRONT_IO_FPGA);
+            let user_design =
+                spi.device(drv_spi_api::devices::ECP5_FRONT_IO_USER_DESIGN);
+
             use drv_i2c_devices::pca9538::*;
             use drv_fpga_devices::ecp5_spi_mux_pca9538::*;
 
@@ -100,6 +132,9 @@ fn main() -> ! {
                 }
             };
         } else if #[cfg(target_board = "gimletlet-2")] {
+            // Hard-coding because the TOML file doesn't specify great names
+            let configuration_port = spi.device(0);
+            let user_design = spi.device(1);
             let driver = drv_fpga_devices::ecp5_spi::Ecp5UsingSpi {
                 sys,
                 done: sys_api::Port::E.pin(15),
@@ -209,7 +244,6 @@ impl<'a, Device: Fpga<'a> + FpgaUserDesign> ServerImpl<'a, Device> {
 
 type RequestError = idol_runtime::RequestError<FpgaError>;
 type ReadDataLease = LenLimit<Leased<R, [u8]>, 128>;
-type WriteDataLease = LenLimit<Leased<W, [u8]>, 128>;
 
 impl<'a, Device: Fpga<'a> + FpgaUserDesign> idl::InOrderFpgaImpl
     for ServerImpl<'a, Device>
@@ -439,7 +473,7 @@ impl<'a, Device: Fpga<'a> + FpgaUserDesign> idl::InOrderFpgaImpl
         msg: &RecvMessage,
         device_index: u8,
         addr: u16,
-        data: WriteDataLease,
+        data: Leased<W, [u8]>,
     ) -> Result<(), RequestError> {
         let header = UserDesignRequestHeader {
             cmd: 0x1,
@@ -452,12 +486,21 @@ impl<'a, Device: Fpga<'a> + FpgaUserDesign> idl::InOrderFpgaImpl
         lock.0
             .user_design_write(header.as_bytes())
             .map_err(FpgaError::from)?;
-        lock.0
-            .user_design_read(&mut self.buffer[..data.len()])
-            .map_err(FpgaError::from)?;
 
-        data.write_range(0..data.len(), &self.buffer[..data.len()])
+        let mut index = 0;
+        while index < data.len() {
+            let chunk_size = (data.len() - index).min(self.buffer.len());
+            lock.0
+                .user_design_read(&mut self.buffer[..chunk_size])
+                .map_err(FpgaError::from)?;
+
+            data.write_range(
+                index..(index + chunk_size),
+                &self.buffer[..chunk_size],
+            )
             .map_err(|_| RequestError::Fail(ClientError::WentAway))?;
+            index += chunk_size;
+        }
 
         Ok(())
     }
@@ -468,11 +511,8 @@ impl<'a, Device: Fpga<'a> + FpgaUserDesign> idl::InOrderFpgaImpl
         device_index: u8,
         op: WriteOp,
         addr: u16,
-        data: ReadDataLease,
+        data: Leased<R, [u8]>,
     ) -> Result<(), RequestError> {
-        data.read_range(0..data.len(), &mut self.buffer[..data.len()])
-            .map_err(|_| RequestError::Fail(ClientError::WentAway))?;
-
         let header = UserDesignRequestHeader {
             cmd: u8::from(op),
             addr: U16::new(addr),
@@ -484,9 +524,20 @@ impl<'a, Device: Fpga<'a> + FpgaUserDesign> idl::InOrderFpgaImpl
         lock.0
             .user_design_write(header.as_bytes())
             .map_err(FpgaError::from)?;
-        lock.0
-            .user_design_write(&self.buffer[..data.len()])
-            .map_err(FpgaError::from)?;
+
+        let mut index = 0;
+        while index < data.len() {
+            let chunk_size = (data.len() - index).min(self.buffer.len());
+            data.read_range(
+                index..(index + chunk_size),
+                &mut self.buffer[..chunk_size],
+            )
+            .map_err(|_| RequestError::Fail(ClientError::WentAway))?;
+            lock.0
+                .user_design_write(&self.buffer[..chunk_size])
+                .map_err(FpgaError::from)?;
+            index += chunk_size;
+        }
 
         Ok(())
     }
@@ -554,3 +605,5 @@ mod idl {
 
     include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

@@ -55,10 +55,8 @@ fn set(index: usize, val: bool) -> Result<(), RequestError<MeanwellError>> {
     if index >= MEANWELL_PINS.len() {
         Err(MeanwellError::NotPresent.into())
     } else {
-        match sys.gpio_set_to(MEANWELL_PINS[index], val) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(MeanwellError::GpioError.into()),
-        }
+        sys.gpio_set_to(MEANWELL_PINS[index], val);
+        Ok(())
     }
 }
 
@@ -71,10 +69,8 @@ fn get(index: usize) -> Result<bool, RequestError<MeanwellError>> {
     if index >= MEANWELL_PINS.len() {
         Err(MeanwellError::NotPresent.into())
     } else {
-        match sys.gpio_read(MEANWELL_PINS[index]) {
-            Ok(val) => Ok(val != 0),
-            Err(_) => Err(MeanwellError::GpioError.into()),
-        }
+        let val = sys.gpio_read(MEANWELL_PINS[index]);
+        Ok(val != 0)
     }
 }
 
@@ -107,13 +103,12 @@ impl idl::InOrderMeanwellImpl for ServerImpl {
 task_slot!(USER_LEDS, user_leds);
 task_slot!(SYS, sys);
 
-const TIMER_MASK: u32 = 1 << 0;
 const TIMER_INTERVAL_LONG: u64 = 900;
 const TIMER_INTERVAL_SHORT: u64 = 100;
 
 impl NotificationHandler for ServerImpl {
     fn current_notification_mask(&self) -> u32 {
-        TIMER_MASK
+        notifications::TIMER_MASK
     }
 
     fn handle_notification(&mut self, _bits: u32) {
@@ -130,7 +125,7 @@ impl NotificationHandler for ServerImpl {
             self.deadline += TIMER_INTERVAL_LONG;
         }
 
-        sys_set_timer(Some(self.deadline), TIMER_MASK);
+        sys_set_timer(Some(self.deadline), notifications::TIMER_MASK);
     }
 }
 
@@ -141,7 +136,7 @@ fn main() -> ! {
     //
     // This will put our timer in the past, and should immediately kick us.
     //
-    sys_set_timer(Some(deadline), TIMER_MASK);
+    sys_set_timer(Some(deadline), notifications::TIMER_MASK);
 
     let mut serverimpl = ServerImpl {
         led_on: false,
@@ -164,7 +159,6 @@ fn main() -> ! {
             Speed::Low,
             Pull::None,
         )
-        .unwrap();
     }
 
     let mut incoming = [0u8; idl::INCOMING_SIZE];
@@ -177,3 +171,5 @@ mod idl {
     use super::MeanwellError;
     include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

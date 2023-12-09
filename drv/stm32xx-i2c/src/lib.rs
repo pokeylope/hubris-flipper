@@ -28,10 +28,25 @@ pub type Isr = device::i2c3::isr::R;
 #[cfg(feature = "g031")]
 use stm32g0::stm32g031 as device;
 
-#[cfg(any(feature = "h743", feature = "h753", feature = "g031", feature = "wb55"))]
+#[cfg(feature = "g030")]
+use stm32g0::stm32g030 as device;
+
+#[cfg(any(
+    feature = "h743",
+    feature = "h753",
+    feature = "g031",
+    feature = "g030",
+    feature = "wb55"
+))]
 pub type RegisterBlock = device::i2c1::RegisterBlock;
 
-#[cfg(any(feature = "h743", feature = "h753", feature = "g031", feature = "wb55"))]
+#[cfg(any(
+    feature = "h743",
+    feature = "h753",
+    feature = "g031",
+    feature = "g030",
+    feature = "wb55"
+))]
 pub type Isr = device::i2c1::isr::R;
 
 pub mod ltc4306;
@@ -43,11 +58,17 @@ use userlib::*;
 
 use drv_stm32xx_sys_api as sys_api;
 
-pub struct I2cPin {
+pub struct I2cPins {
     pub controller: drv_i2c_api::Controller,
     pub port: drv_i2c_api::PortIndex,
-    pub gpio_pins: sys_api::PinSet,
+    pub scl: sys_api::PinSet,
+    pub sda: sys_api::PinSet,
     pub function: sys_api::Alternate,
+}
+
+/// Single GPIO pin, which is never dynamically remapped
+pub struct I2cGpio {
+    pub gpio_pins: sys_api::PinSet,
 }
 
 pub struct I2cController<'a> {
@@ -111,7 +132,13 @@ pub struct I2cMux<'a> {
     pub port: drv_i2c_api::PortIndex,
     pub id: drv_i2c_api::Mux,
     pub driver: &'a dyn I2cMuxDriver,
-    pub enable: Option<I2cPin>,
+
+    /// Optional enable / reset line
+    ///
+    /// When this is high, the chip is enabled; when it is low, the chip is held
+    /// in reset. On the LTC4306, this is an active-high ENABLE; on the PCA954x,
+    /// it's an active-low RESET.
+    pub nreset: Option<I2cGpio>,
     pub address: u8,
 }
 
@@ -167,7 +194,7 @@ impl I2cMux<'_> {
         use drv_i2c_api::ResponseCode;
 
         match code {
-            ResponseCode::NoDevice => ResponseCode::BadMuxAddress,
+            ResponseCode::NoDevice => ResponseCode::MuxMissing,
             ResponseCode::NoRegister => ResponseCode::BadMuxRegister,
             ResponseCode::BusLocked => ResponseCode::BusLockedMux,
             ResponseCode::BusReset => ResponseCode::BusResetMux,
@@ -179,18 +206,17 @@ impl I2cMux<'_> {
         &self,
         sys: &sys_api::Sys,
     ) -> Result<(), drv_i2c_api::ResponseCode> {
-        if let Some(pin) = &self.enable {
+        if let Some(pin) = &self.nreset {
             // Set the pins to high _before_ switching to output to avoid
             // glitching.
-            sys.gpio_set(pin.gpio_pins).unwrap();
+            sys.gpio_set(pin.gpio_pins);
             // Now, expose them as outputs.
             sys.gpio_configure_output(
                 pin.gpio_pins,
                 sys_api::OutputType::PushPull,
-                sys_api::Speed::High,
+                sys_api::Speed::Low,
                 sys_api::Pull::None,
-            )
-            .unwrap();
+            );
         }
 
         Ok(())
@@ -200,9 +226,9 @@ impl I2cMux<'_> {
         &self,
         sys: &sys_api::Sys,
     ) -> Result<(), drv_i2c_api::ResponseCode> {
-        if let Some(pin) = &self.enable {
-            sys.gpio_reset(pin.gpio_pins).unwrap();
-            sys.gpio_set(pin.gpio_pins).unwrap();
+        if let Some(pin) = &self.nreset {
+            sys.gpio_reset(pin.gpio_pins);
+            sys.gpio_set(pin.gpio_pins);
         }
 
         Ok(())
@@ -216,6 +242,11 @@ impl I2cController<'_> {
     }
 
     fn configure_timing(&self, i2c: &RegisterBlock) {
+        // TODO: this configuration mechanism is getting increasingly hairy. It
+        // generally assumes that a given processor runs at a given speed on all
+        // boards, which is not at all true. As of recently it's now doing a
+        // hybrid of "CPU model" and "board name" sensing. Should move to
+        // configuration!
         cfg_if::cfg_if! {
             if #[cfg(feature = "h7b3")] {
                 // We want to set our timing to achieve a 100kHz SCL. Given
@@ -283,7 +314,26 @@ impl I2cController<'_> {
                     .scldel().bits(scldel)
                     .sdadel().bits(0)
                 });
-            } else if #[cfg(feature = "g031")] {
+            } else if #[cfg(target_board = "oxcon2023g0")] {
+                // This board runs at 64 MHz, yielding:
+                //
+                // - A PRESC of 4, yielding a t_presc of 62 ns
+                // - An SCLH of 61, yielding a t_sclh of 3844 ns
+                // - An SCLL of 91, yielding a t_scll of 5704 ns
+                //
+                // Taken together, this yields a t_scl of 9548 ns.  Which,
+                // when added to our t_sync1 and t_sync2 will be close to our
+                // target of 10000 ns.  Finally, we set SCLDEL to 3 and SDADEL
+                // to 0 -- values that come from the STM32CubeMX tool (as
+                // advised by 47.4.5).
+                i2c.timingr.write(|w| { w
+                    .presc().bits(4)
+                    .sclh().bits(61)
+                    .scll().bits(91)
+                    .scldel().bits(3)
+                    .sdadel().bits(0)
+                });
+            } else if #[cfg(any(feature = "g031", feature = "g030"))] {
                 // On the G0, our APB peripheral clock is 16MHz, yielding:
                 //
                 // - A PRESC of 0, yielding a t_presc of 62 ns
@@ -340,7 +390,7 @@ impl I2cController<'_> {
                     .timeouta().bits(3417)          // Timeout value
                     .tidle().clear_bit()            // Want SCL, not IDLE
                 });
-            } else if #[cfg(feature = "g031")] {
+            } else if #[cfg(any(feature = "g030", feature = "g031"))] {
                 i2c.timeoutr.write(|w| { w
                     .timouten().set_bit()           // Enable SCL timeout
                     .timeouta().bits(196)           // Timeout value
@@ -436,10 +486,20 @@ impl I2cController<'_> {
     fn wait_until_notbusy(&self) -> Result<(), drv_i2c_api::ResponseCode> {
         let i2c = self.registers;
 
-        let mut laps = 0;
-        const BUSY_SLEEP_THRESHOLD: u32 = 3;
+        //
+        // We will spin for some number of laps, in which we very much expect
+        // a functional controller to no longer be busy.  The threshold
+        // should err on the side of being a little too high:  if the
+        // controller remains busy after BUSY_SLEEP_THRESHOLD laps, we will
+        // sleep for two milliseconds -- and we do not want to hit that
+        // delay on otherwise functional systems!  (If, on the other hand,
+        // the threshold is too high and the controller is hung, we will
+        // consume more CPU than we would otherwise -- a relatively benign
+        // failure mode for a condition expected to be unusual.)
+        //
+        const BUSY_SLEEP_THRESHOLD: u32 = 300;
 
-        loop {
+        for lap in 0..=BUSY_SLEEP_THRESHOLD + 1 {
             let isr = i2c.isr.read();
             ringbuf_entry!(Trace::WaitISR(isr.bits()));
 
@@ -450,20 +510,17 @@ impl I2cController<'_> {
             // up to the controller, the timeout flag is set, we clear it and
             // ignore it -- we know that it's spurious.
             //
-            if laps == 0 && isr.timeout().is_timeout() {
+            if lap == 0 && isr.timeout().is_timeout() {
                 i2c.icr.write(|w| w.timoutcf().set_bit());
             }
 
             if !isr.busy().is_busy() {
-                break;
+                return Ok(());
             }
 
             self.check_errors(&isr)?;
 
-            laps += 1;
-
-            #[allow(clippy::comparison_chain)] // clippy misfire
-            if laps == BUSY_SLEEP_THRESHOLD {
+            if lap == BUSY_SLEEP_THRESHOLD {
                 //
                 // If we have taken BUSY_SLEEP_THRESHOLD laps, we are going to
                 // sleep for two ticks -- which should be far greater than the
@@ -471,21 +528,19 @@ impl I2cController<'_> {
                 //
                 ringbuf_entry!(Trace::BusySleep);
                 hl::sleep_for(2);
-            } else if laps > BUSY_SLEEP_THRESHOLD {
-                //
-                // We have already taken BUSY_SLEEP_THRESHOLD laps AND a two
-                // tick sleep -- and the busy bit is still set.  At this point,
-                // we need to return an error indicating that we need to reset
-                // the controller.  We return a disjoint error code here to
-                // be able to know that we hit this condition rather than our
-                // more expected conditions on bus lockup (namely, a timeout
-                // or arbitration lost).
-                //
-                return Err(drv_i2c_api::ResponseCode::ControllerLocked);
             }
+            // On lap == BUSY_SLEEP_THRESHOLD + 1 we'll fall out.
         }
 
-        Ok(())
+        //
+        // We have already taken BUSY_SLEEP_THRESHOLD laps AND a two tick sleep
+        // -- and the busy bit is still set.  At this point, we need to return
+        // an error indicating that we need to reset the controller.  We return
+        // a disjoint error code here to be able to know that we hit this
+        // condition rather than our more expected conditions on bus lockup
+        // (namely, a timeout or arbitration lost).
+        //
+        Err(drv_i2c_api::ResponseCode::ControllerBusy)
     }
 
     /// Perform a write to and then a read from the specified device.  Either

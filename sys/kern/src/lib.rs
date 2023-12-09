@@ -28,7 +28,6 @@
 
 #![cfg_attr(target_os = "none", no_std)]
 #![feature(naked_functions)]
-#![feature(asm_sym)]
 #![feature(asm_const)]
 // Require an unsafe block even in an unsafe fn, because unsafe fns are about
 // contract, not implementation.
@@ -38,7 +37,10 @@
 pub mod arch;
 
 pub mod atomic;
+mod descs;
 pub mod err;
+pub mod fail;
+pub mod header;
 pub mod kipc;
 pub mod profiling;
 pub mod startup;
@@ -46,3 +48,4 @@ pub mod syscalls;
 pub mod task;
 pub mod time;
 pub mod umem;
+pub mod util;

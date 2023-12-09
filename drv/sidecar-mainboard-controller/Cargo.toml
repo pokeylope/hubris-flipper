@@ -4,15 +4,31 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-drv-auxflash-api = {path = "../../drv/auxflash-api"}
-drv-fpga-api = {path = "../../drv/fpga-api", features = ["auxflash"]}
-userlib = {path = "../../sys/userlib"}
-num-traits = { version = "0.2.12", default-features = false }
-zerocopy = "0.6.1"
+bitfield = { workspace = true }
+cfg-if = { workspace = true }
+derive_more = { workspace = true }
+num-derive = { workspace = true }
+num-traits = { workspace = true }
+zerocopy = { workspace = true }
+
+drv-auxflash-api = { path = "../auxflash-api", optional = true }
+drv-fpga-api = { path = "../fpga-api" }
+drv-fpga-user-api = { path = "../fpga-user-api" }
+drv-ignition-api = { path = "../ignition-api" }
+userlib = { path = "../../sys/userlib" }
+
+[features]
+bitstream = ["dep:drv-auxflash-api", "drv-fpga-api/auxflash"]
 
 [build-dependencies]
-build-fpga-regmap = {path = "../../build/fpga-regmap"}
-build-util = {path = "../../build/util"}
-serde = { version = "1.0.114", features = ["derive"] }
-serde_json = "1.0"
-gnarle = {path = "../../lib/gnarle", features=["std"]}
+build-fpga-regmap = { path = "../../build/fpga-regmap" }
+build-util = { path = "../../build/util" }
+gnarle = { path = "../../lib/gnarle", features=["std"] }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lib]
+test = false
+doctest = false
+bench = false

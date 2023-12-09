@@ -1,0 +1,2 @@
+name = "psc-b-dev"
+inherit = ["rev-b.toml", "dev.toml"]

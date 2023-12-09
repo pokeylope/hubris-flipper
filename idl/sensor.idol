@@ -7,42 +7,115 @@ Interface(
             args: {
                 "id": (
                     type: "SensorId",
-                    recv: From("usize", None),
+                    recv: From("u32", None),
                 )
             },
             reply: Result(
                 ok: "f32",
                 err: CLike("SensorError"),
             ),
+            idempotent: true,
+        ),
+        "get_reading": (
+            args: {
+                "id": (
+                    type: "SensorId",
+                )
+            },
+            reply: Result(
+                ok: "Reading",
+                err: CLike("SensorError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "get_raw_reading": (
+            description: "returns the most recent reading (data or error) and its timestamp",
+            args: {
+                "id": (
+                    type: "SensorId",
+                )
+            },
+            reply: Result(
+                ok: "(Result<f32, NoData>, u64)",
+                err: CLike("SensorApiError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "get_last_data": (
+            description: "returns the most recent data reading and its timestamp",
+            args: {
+                "id": (
+                    type: "SensorId",
+                )
+            },
+            reply: Result(
+                ok: "(f32, u64)",
+                err: CLike("SensorApiError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "get_last_nodata": (
+            description: "returns the most recent error recorded and its timestamp",
+            args: {
+                "id": (
+                    type: "SensorId",
+                )
+            },
+            reply: Result(
+                ok: "(NoData, u64)",
+                err: CLike("SensorApiError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
         ),
         "post": (
             args: {
                 "id": (
                     type: "SensorId",
-                    recv: From("usize", None),
+                    recv: From("u32", None),
                 ),
                 "value": "f32",
+                "timestamp": "u64",
             },
             reply: Result(
                 ok: "()",
-                err: CLike("SensorError"),
+                err: CLike("SensorApiError"),
             ),
+            idempotent: true,
         ),
         "nodata": (
             args: {
                 "id": (
                     type: "SensorId",
-                    recv: From("usize", None),
+                    recv: From("u32", None),
                 ),
                 "nodata": (
                     type: "NoData",
                     recv: FromPrimitive("u8"),
-                )
+                ),
+                "timestamp": "u64",
             },
             reply: Result(
                 ok: "()",
-                err: CLike("SensorError"),
+                err: CLike("SensorApiError"),
             ),
+            idempotent: true,
+        ),
+        "get_nerrors": (
+            args: {
+                "id": (
+                    type: "SensorId",
+                    recv: From("u32", None),
+                )
+            },
+            reply: Result(
+                ok: "u32",
+                err: CLike("SensorApiError"),
+            ),
+            idempotent: true,
         ),
     },
 )

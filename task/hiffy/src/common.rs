@@ -13,7 +13,7 @@ use userlib::{sys_refresh_task_id, sys_send, Generation, TaskId};
 /// This could become a From impl on Failure if moved into hif, which would let
 /// it be replaced syntactically by a question mark.
 #[allow(dead_code)]
-fn func_err<T, E>(e: Result<T, E>) -> Result<T, hif::Failure>
+pub fn func_err<T, E>(e: Result<T, E>) -> Result<T, hif::Failure>
 where
     E: Into<u32>,
 {
@@ -27,6 +27,7 @@ where
 /// on the Hubris side.  (The purpose of this function is to allow for
 /// device-mandated sleeps to in turn for allow for bulk device operations.)
 ///
+#[allow(dead_code)]
 pub(crate) fn sleep(
     stack: &[Option<u32>],
     _data: &[u8],
@@ -562,7 +563,9 @@ pub(crate) fn qspi_bulk_erase(
     use drv_gimlet_hf_api as hf;
 
     let server = hf::HostFlash::from(HF.get_task_id());
-    func_err(server.bulk_erase())?;
+    func_err(
+        server.bulk_erase(hf::HfProtectMode::AllowModificationsToSector0),
+    )?;
     Ok(0)
 }
 
@@ -571,6 +574,32 @@ pub(crate) fn qspi_page_program(
     stack: &[Option<u32>],
     data: &[u8],
     _rval: &mut [u8],
+) -> Result<usize, Failure> {
+    qspi_page_program_inner(
+        stack,
+        data,
+        drv_gimlet_hf_api::HfProtectMode::ProtectSector0,
+    )
+}
+
+#[cfg(feature = "qspi")]
+pub(crate) fn qspi_page_program_sector0(
+    stack: &[Option<u32>],
+    data: &[u8],
+    _rval: &mut [u8],
+) -> Result<usize, Failure> {
+    qspi_page_program_inner(
+        stack,
+        data,
+        drv_gimlet_hf_api::HfProtectMode::AllowModificationsToSector0,
+    )
+}
+
+#[cfg(feature = "qspi")]
+fn qspi_page_program_inner(
+    stack: &[Option<u32>],
+    data: &[u8],
+    protect: drv_gimlet_hf_api::HfProtectMode,
 ) -> Result<usize, Failure> {
     use drv_gimlet_hf_api as hf;
 
@@ -591,7 +620,7 @@ pub(crate) fn qspi_page_program(
     let data = &data[offset..offset + len];
 
     let server = hf::HostFlash::from(HF.get_task_id());
-    func_err(server.page_program(addr, data))?;
+    func_err(server.page_program(addr, protect, data))?;
     Ok(0)
 }
 
@@ -687,7 +716,22 @@ pub(crate) fn qspi_sector_erase(
     let addr = frame[0].ok_or(Failure::Fault(Fault::MissingParameters))?;
 
     let server = hf::HostFlash::from(HF.get_task_id());
-    func_err(server.sector_erase(addr))?;
+    func_err(server.sector_erase(addr, hf::HfProtectMode::ProtectSector0))?;
+    Ok(0)
+}
+
+#[cfg(feature = "qspi")]
+pub(crate) fn qspi_sector0_erase(
+    _stack: &[Option<u32>],
+    _data: &[u8],
+    _rval: &mut [u8],
+) -> Result<usize, Failure> {
+    use drv_gimlet_hf_api as hf;
+
+    let server = hf::HostFlash::from(HF.get_task_id());
+    func_err(
+        server.sector_erase(0, hf::HfProtectMode::AllowModificationsToSector0),
+    )?;
     Ok(0)
 }
 
@@ -829,123 +873,4 @@ pub(crate) fn rng_fill(
 
     func_err(Rng::from(RNG.get_task_id()).fill(&mut rval[0..count]))?;
     Ok(count)
-}
-
-#[cfg(feature = "update")]
-task_slot!(UPDATE, update_server);
-
-#[cfg(feature = "update")]
-fn update_args(stack: &[Option<u32>]) -> Result<(usize, usize), Failure> {
-    if stack.len() < 2 {
-        return Err(Failure::Fault(Fault::MissingParameters));
-    }
-
-    let fp = stack.len() - 2;
-
-    let len = match stack[fp + 0] {
-        Some(len) => len as usize,
-        None => {
-            return Err(Failure::Fault(Fault::EmptyParameter(0)));
-        }
-    };
-
-    let block_num = match stack[fp + 1] {
-        Some(len) => len as usize,
-        None => {
-            return Err(Failure::Fault(Fault::EmptyParameter(0)));
-        }
-    };
-
-    Ok((block_num, len))
-}
-
-#[cfg(feature = "update")]
-pub(crate) fn write_block(
-    stack: &[Option<u32>],
-    data: &[u8],
-    _rval: &mut [u8],
-) -> Result<usize, Failure> {
-    let (start_block, len) = update_args(stack)?;
-
-    if len > data.len() {
-        return Err(Failure::Fault(Fault::AccessOutOfBounds));
-    }
-
-    let update = drv_update_api::Update::from(UPDATE.get_task_id());
-
-    let block_size = func_err(update.block_size())?;
-
-    for (i, c) in data[..len].chunks(block_size).enumerate() {
-        func_err(update.write_one_block(start_block + i, c))?;
-    }
-
-    Ok(0)
-}
-
-#[cfg(feature = "update")]
-pub(crate) fn start_update(
-    stack: &[Option<u32>],
-    _data: &[u8],
-    _rval: &mut [u8],
-) -> Result<usize, Failure> {
-    use userlib::FromPrimitive;
-
-    if stack.is_empty() {
-        return Err(Failure::Fault(Fault::MissingParameters));
-    }
-
-    let fp = stack.len() - 1;
-
-    let target = match stack[fp + 0] {
-        Some(target) => target as usize,
-        None => {
-            return Err(Failure::Fault(Fault::EmptyParameter(0)));
-        }
-    };
-
-    let img = match drv_update_api::UpdateTarget::from_usize(target) {
-        Some(i) => i,
-        None => return Err(Failure::Fault(Fault::BadParameter(0))),
-    };
-
-    func_err(
-        drv_update_api::Update::from(UPDATE.get_task_id())
-            .prep_image_update(img),
-    )?;
-    Ok(0)
-}
-
-#[cfg(feature = "update")]
-pub(crate) fn finish_update(
-    _stack: &[Option<u32>],
-    _data: &[u8],
-    _rval: &mut [u8],
-) -> Result<usize, Failure> {
-    func_err(
-        drv_update_api::Update::from(UPDATE.get_task_id())
-            .finish_image_update(),
-    )?;
-    Ok(0)
-}
-
-#[cfg(feature = "update")]
-pub(crate) fn block_size(
-    _stack: &[Option<u32>],
-    _data: &[u8],
-    rval: &mut [u8],
-) -> Result<usize, Failure> {
-    let size = func_err(
-        drv_update_api::Update::from(UPDATE.get_task_id()).block_size(),
-    )?;
-
-    let bytes: [u8; 4] = [
-        (size & 0xff) as u8,
-        ((size >> 8) & 0xff) as u8,
-        ((size >> 16) & 0xff) as u8,
-        ((size >> 24) & 0xff) as u8,
-    ];
-
-    rval[..4].copy_from_slice(&bytes);
-
-    Ok(4)
 }

@@ -1,0 +1,5 @@
+name = "gimlet-c"
+board = "gimlet-c"
+
+# Rev C is mostly identical to Rev B, but with a new name and board
+inherit = "rev-b.toml"

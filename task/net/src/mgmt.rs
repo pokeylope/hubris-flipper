@@ -2,13 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::miim_bridge::MiimBridge;
-use drv_spi_api::SpiDevice;
+use crate::{bsp_support::Ksz8463, miim_bridge::MiimBridge};
 use drv_stm32h7_eth::Ethernet;
 use drv_stm32xx_sys_api::{self as sys_api, OutputType, Pull, Speed, Sys};
-use ksz8463::{
-    Error as KszError, Ksz8463, MIBCounterValue, Register as KszRegister,
-};
+use ksz8463::{Error as KszError, MIBCounterValue, Register as KszRegister};
 use ringbuf::*;
 use task_net_api::{
     ManagementCounters, ManagementLinkStatus, MgmtError, PhyError,
@@ -50,12 +47,12 @@ pub struct Config {
     pub slow_power_en: bool,
 
     /// Goes high once power is good
-    pub power_good: Option<sys_api::PinSet>,
+    pub power_good: &'static [sys_api::PinSet],
 
     /// Goes high once the PLLs are locked
     pub pll_lock: Option<sys_api::PinSet>,
 
-    pub ksz8463_spi: SpiDevice,
+    pub ksz8463: Ksz8463,
     pub ksz8463_nrst: sys_api::PinSet,
     pub ksz8463_rst_type: Ksz8463ResetSpeed,
     pub ksz8463_vlan_mode: ksz8463::VLanMode,
@@ -78,7 +75,7 @@ impl Config {
         Bsp { ksz8463, vsc85x2 }
     }
 
-    fn configure_ksz8463(self, sys: &Sys) -> ksz8463::Ksz8463 {
+    fn configure_ksz8463(self, sys: &Sys) -> Ksz8463 {
         // The datasheet recommends a particular combination of diodes and
         // capacitors which dramatically slow down the rise of the reset
         // line, meaning you have to wait for extra long here.
@@ -91,41 +88,36 @@ impl Config {
                 Ksz8463ResetSpeed::Slow => 150,
                 Ksz8463ResetSpeed::Normal => 1,
             },
-        )
-        .unwrap();
-
-        let ksz8463 = Ksz8463::new(self.ksz8463_spi);
+        );
 
         // The KSZ8463 connects to the SP over RMII, then sends data to the
         // VSC8552 over 100-BASE FX
-        ksz8463
+        self.ksz8463
             .configure(ksz8463::Mode::Fiber, self.ksz8463_vlan_mode)
             .unwrap();
-        ksz8463
+        self.ksz8463
     }
 
     fn configure_vsc85x2(&self, sys: &Sys, eth: &Ethernet) -> Vsc85x2 {
         // TODO: wait for PLL lock to happen here
 
         // Start with reset low and COMA_MODE high
-        sys.gpio_reset(self.vsc85x2_nrst).unwrap();
+        sys.gpio_reset(self.vsc85x2_nrst);
         sys.gpio_configure_output(
             self.vsc85x2_nrst,
             OutputType::PushPull,
             Speed::Low,
             Pull::None,
-        )
-        .unwrap();
+        );
 
         if let Some(coma_mode) = self.vsc85x2_coma_mode {
-            sys.gpio_set(coma_mode).unwrap();
+            sys.gpio_set(coma_mode);
             sys.gpio_configure_output(
                 coma_mode,
                 OutputType::PushPull,
                 Speed::Low,
                 Pull::None,
-            )
-            .unwrap();
+            );
         }
 
         // Do a hard reset of power, if that's present on this board
@@ -138,13 +130,18 @@ impl Config {
                 // See hardware-psc/issues/48 for analysis; it appears to
                 // be an issue with the level shifter rise times.
                 if self.slow_power_en { 200 } else { 4 },
-            )
-            .unwrap();
+            );
         }
 
-        // TODO: sleep for PG lines going high here
+        // Wait for all PG lines to be set
+        for p in self.power_good {
+            sys.gpio_configure_input(*p, Pull::None);
+        }
+        while !self.power_good.iter().all(|p| sys.gpio_read(*p) != 0) {
+            sleep_for(1);
+        }
 
-        sys.gpio_set(self.vsc85x2_nrst).unwrap();
+        sys.gpio_set(self.vsc85x2_nrst);
         sleep_for(120); // Wait for the chip to come out of reset
 
         // Build handle for the VSC85x2 PHY, then initialize it
@@ -153,7 +150,7 @@ impl Config {
 
         // Disable COMA_MODE
         if let Some(coma_mode) = self.vsc85x2_coma_mode {
-            sys.gpio_reset(coma_mode).unwrap();
+            sys.gpio_reset(coma_mode);
         }
 
         vsc85x2.unwrap() // TODO

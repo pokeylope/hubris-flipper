@@ -2,20 +2,23 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::pins;
-use drv_spi_api::Spi;
+#[cfg(not(feature = "ksz8463"))]
+compile_error!("this BSP requires the ksz8463 feature");
+
+use crate::{
+    bsp_support::{self, Ksz8463},
+    pins,
+};
+use drv_spi_api::SpiServer;
 use drv_stm32h7_eth as eth;
 use drv_stm32xx_sys_api::{Alternate, Port, Sys};
 use ksz8463::{
-    Error as RawKszError, Ksz8463, MIBCounter, MIBCounterValue,
-    Register as KszRegister,
+    Error as RawKszError, MIBCounter, MIBCounterValue, Register as KszRegister,
 };
 use ringbuf::*;
 use task_net_api::PhyError;
-use userlib::{hl::sleep_for, task_slot};
+use userlib::hl::sleep_for;
 use vsc7448_pac::types::PhyRegisterAddress;
-
-task_slot!(SPI, spi_driver);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Trace {
@@ -29,41 +32,40 @@ enum Trace {
 }
 ringbuf!(Trace, 32, Trace::None);
 
-// This system wants to be woken periodically to do logging
-pub const WAKE_INTERVAL: Option<u64> = Some(5000);
-
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn preinit() {
-    // Nothing to do here
-}
-
-pub fn configure_ethernet_pins(sys: &Sys) {
-    pins::RmiiPins {
-        refclk: Port::A.pin(1),
-        crs_dv: Port::A.pin(7),
-        tx_en: Port::B.pin(11),
-        txd0: Port::B.pin(12),
-        txd1: Port::B.pin(13),
-        rxd0: Port::C.pin(4),
-        rxd1: Port::C.pin(5),
-        af: Alternate::AF11,
-    }
-    .configure(sys);
-}
-
-pub struct Bsp {
+pub struct BspImpl {
     ksz8463: Ksz8463,
 }
 
-impl Bsp {
-    pub fn new(_eth: &eth::Ethernet, sys: &Sys) -> Self {
+impl bsp_support::Bsp for BspImpl {
+    // This system wants to be woken periodically to do logging
+    const WAKE_INTERVAL: Option<u64> = Some(5000);
+
+    fn preinit() {}
+
+    fn configure_ethernet_pins(sys: &Sys) {
+        pins::RmiiPins {
+            refclk: Port::A.pin(1),
+            crs_dv: Port::A.pin(7),
+            tx_en: Port::B.pin(11),
+            txd0: Port::B.pin(12),
+            txd1: Port::B.pin(13),
+            rxd0: Port::C.pin(4),
+            rxd1: Port::C.pin(5),
+            af: Alternate::AF11,
+        }
+        .configure(sys);
+    }
+
+    fn new(_eth: &eth::Ethernet, sys: &Sys) -> Self {
         let ksz8463 = loop {
-            // SPI device is based on ordering in app.toml
-            let ksz8463_spi = Spi::from(SPI.get_task_id()).device(0);
+            let spi = bsp_support::claim_spi(sys);
+            // SPI4_HEADER is shared by both the SPI4 header and the NIC
+            let ksz8463_spi = spi.device(drv_spi_api::devices::SPI4_HEADER);
 
             // Initialize the KSZ8463 (using SPI4_RESET, PB10)
-            sys.gpio_init_reset_pulse(Port::B.pin(10), 10, 1).unwrap();
+            sys.gpio_init_reset_pulse(Port::B.pin(10), 10, 1);
             let ksz8463 = Ksz8463::new(ksz8463_spi);
 
             #[cfg(feature = "vlan")]
@@ -84,7 +86,7 @@ impl Bsp {
         Self { ksz8463 }
     }
 
-    pub fn wake(&self, _eth: &eth::Ethernet) {
+    fn wake(&self, _eth: &eth::Ethernet) {
         for port in [1, 2] {
             ringbuf_entry!(
                 match self.ksz8463.read(KszRegister::PxMBSR(port)) {
@@ -109,7 +111,7 @@ impl Bsp {
     }
 
     /// Calls a function on a `Phy` associated with the given port.
-    pub fn phy_read(
+    fn phy_read(
         &mut self,
         _port: u8,
         _reg: PhyRegisterAddress<u16>,
@@ -119,17 +121,17 @@ impl Bsp {
     }
 
     /// Calls a function on a `Phy` associated with the given port.
-    pub fn phy_write(
+    fn phy_write(
         &mut self,
         _port: u8,
         _reg: PhyRegisterAddress<u16>,
         _value: u16,
         _eth: &eth::Ethernet,
-    ) -> Result<u16, PhyError> {
+    ) -> Result<(), PhyError> {
         Err(PhyError::NotImplemented)
     }
 
-    pub fn ksz8463(&self) -> &Ksz8463 {
+    fn ksz8463(&self) -> &Ksz8463 {
         &self.ksz8463
     }
 }

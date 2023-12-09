@@ -9,7 +9,7 @@
 
 use drv_i2c_api::*;
 use drv_stm32xx_i2c::*;
-use drv_stm32xx_sys_api::{OutputType, Pull, Speed, Sys};
+use drv_stm32xx_sys_api::{Mode, OutputType, PinSet, Pull, Speed, Sys};
 
 use fixedmap::*;
 use ringbuf::*;
@@ -31,7 +31,7 @@ fn lookup_controller<'a, 'b>(
 /// Validates a port for the specified controller.
 ///
 fn validate_port(
-    pins: &[I2cPin],
+    pins: &[I2cPins],
     controller: Controller,
     port: PortIndex,
 ) -> Result<(), ResponseCode> {
@@ -42,135 +42,214 @@ fn validate_port(
     Ok(())
 }
 
+///
+/// Calls `func` for the specified mux ID on the specified controller and
+/// port -- or returns `ResponseCode::MuxNotFound` if there is no such mux
+///
 fn find_mux(
     controller: &I2cController<'_>,
     port: PortIndex,
     muxes: &[I2cMux<'_>],
-    mux: Option<(Mux, Segment)>,
-    mut func: impl FnMut(&I2cMux<'_>, Mux, Segment) -> Result<(), ResponseCode>,
+    id: Mux,
+    mut func: impl FnMut(&I2cMux<'_>) -> Result<(), ResponseCode>,
 ) -> Result<(), ResponseCode> {
-    match mux {
-        Some((id, segment)) => {
-            for mux in muxes {
-                if mux.controller != controller.controller {
-                    continue;
-                }
-
-                if mux.port != port || mux.id != id {
-                    continue;
-                }
-
-                return func(mux, id, segment);
-            }
-
-            Err(ResponseCode::MuxNotFound)
+    for mux in muxes {
+        if mux.controller == controller.controller
+            && mux.port == port
+            && mux.id == id
+        {
+            return func(mux);
         }
-        None => Ok(()),
     }
+
+    Err(ResponseCode::MuxNotFound)
 }
 
+///
+/// Calls `func` for all muxes on the specified controller and port.
+///
+fn all_muxes(
+    controller: &I2cController<'_>,
+    port: PortIndex,
+    muxes: &[I2cMux<'_>],
+    mut func: impl FnMut(&I2cMux<'_>) -> Result<(), ResponseCode>,
+) -> Result<(), ResponseCode> {
+    for mux in muxes {
+        if mux.controller == controller.controller && mux.port == port {
+            func(mux)?;
+        }
+    }
+
+    Ok(())
+}
+
+///
+/// Configure the mux+segment to use for the next transaction.  If anything
+/// goes wrong here, the mux state will be set to unknown and an error
+/// returned.  No operation should be performed on a bus without this
+/// routine correctly returning!
+///
 fn configure_mux(
-    map: &mut MuxMap,
+    muxmap: &mut MuxMap,
     controller: &I2cController<'_>,
     port: PortIndex,
     mux: Option<(Mux, Segment)>,
     muxes: &[I2cMux<'_>],
     ctrl: &I2cControl,
 ) -> Result<(), ResponseCode> {
-    //
-    // If we aren't doing an operation to a segment on a mux and we have had a
-    // mux+segment enabled on this bus, we explicitly disable all segments on
-    // the formerly enabled mux.  On the one hand, this shouldn't be strictly
-    // necessarily (we generally design I2C addresses o avoid conflicts with
-    // enabled segments), but on the other, we want to minimize the ability of
-    // a bad component on a mux'd segment (e.g., a FRU) to wreak havoc
-    // elsewhere in the system -- especially because the failure mode of an
-    // (errant) address conflict can be pretty brutal.
-    //
-    if mux.is_none() {
-        if let Some(current) = map.get((controller.controller, port)) {
-            find_mux(controller, port, muxes, Some(current), |old, _, _| {
-                old.driver.enable_segment(old, controller, None, ctrl)
+    let bus = (controller.controller, port);
+
+    match muxmap.get(bus) {
+        Some(MuxState::Enabled(current_id, current_segment)) => match mux {
+            Some((id, segment)) if id == current_id => {
+                //
+                // We have an enabled mux+segment on this bus, and it matches
+                // our desired mux.  (If the segment matches, we're done and
+                // can return; if the segment doesn't match we will set it
+                // to our desired segment below.)
+                //
+                if segment == current_segment {
+                    return Ok(());
+                }
+            }
+            _ => {
+                //
+                // We have an enabled mux+segment on this bus, but it doesn't
+                // match our desired mux -- which is to say that we have
+                // either enabled a different mux or no mux at all.  In
+                // either case, we will disable all segments on our currently
+                // enabled mux.  If we are not enabling a mux at all, this
+                // shouldn't be strictly necessarily (we generally design I2C
+                // addresses to avoid conflicts with enabled segments), but we
+                // want to minimize the ability of a bad component on a mux'd
+                // segment (e.g., a FRU) to wreak havoc elsewhere in the
+                // system -- especially because the failure mode of an
+                // (errant) address conflict can be pretty brutal.
+                //
+                find_mux(controller, port, muxes, current_id, |mux| {
+                    mux.driver.enable_segment(mux, controller, None, ctrl)
+                })
+                .map_err(|err| {
+                    //
+                    // We have failed to disable the segments on our current
+                    // mux -- which means we are in an unknown mux state for
+                    // this bus.  Set our state, and return the error.
+                    //
+                    muxmap.insert(bus, MuxState::Unknown);
+                    err
+                })?;
+
+                //
+                // We now know that no mux+segment is enabled; indicate
+                // this by removing this bus from the muxmap.
+                //
+                muxmap.remove(bus);
+            }
+        },
+
+        Some(MuxState::Unknown) => {
+            //
+            // We are in an unknown mux state.  Before we can do anything, we
+            // need to successfully talk to every mux (or successfully learn
+            // that the mux is gone entirely!), and disable every segment.  If
+            // there is any failure through here that isn't the mux being
+            // affirmatively gone, we'll just return the error, leaving our
+            // mux state as unknown.
+            //
+            all_muxes(controller, port, muxes, |mux| {
+                match mux.driver.enable_segment(mux, controller, None, ctrl) {
+                    Err(ResponseCode::MuxMissing) => {
+                        //
+                        // The mux is gone entirely.  We really don't expect
+                        // this on any production system, but it can be true on
+                        // some special lab systems (you know who you are!).
+                        // Regardless of its origin, we can limit the blast
+                        // radius in this case: if the mux is affirmatively
+                        // gone (that is, no device is acking its address), we
+                        // can assume that the mux is absent rather than
+                        // Byzantine -- and therefore assume that its segments
+                        // are as good as disabled and allow other traffic on
+                        // the bus.  So on this error (and only this error), we
+                        // note that we saw it, and drive on.  (Note that
+                        // attempting to speak to a device on a segment on the
+                        // missing mux will properly return MuxMissing -- and
+                        // set our bus's mux state to be unknown.)
+                        //
+                        ringbuf_entry!(Trace::MuxMissing(mux.address));
+                        Ok(())
+                    }
+                    other => other,
+                }
             })?;
 
-            map.remove((controller.controller, port));
+            //
+            // We have successfully transitioned to a known state -- namely,
+            // that no mux+segment is enabled.  Indicate this by removing
+            // this bus from the muxmap.
+            //
+            ringbuf_entry!(Trace::MuxUnknownRecover(bus));
+            muxmap.remove(bus);
         }
 
-        return Ok(());
+        None => {}
     }
 
-    find_mux(controller, port, muxes, mux, |mux, id, segment| {
-        // Determine if the current segment matches our specified segment...
-        if let Some(current) = map.get((controller.controller, port)) {
-            if current.0 == id && current.1 == segment {
-                return Ok(());
-            }
+    //
+    // We know that no mux+segment is enabled OR we have the current mux
+    // but we need to enable a different segment.
+    //
+    if let Some((id, segment)) = mux {
+        find_mux(controller, port, muxes, id, |mux| {
+            mux.driver
+                .enable_segment(mux, controller, Some(segment), ctrl)
+                .map_err(|err| {
+                    //
+                    // We have failed to enable our new mux+segment.
+                    // Transition ourselves into the unknown state and return
+                    // the error.
+                    //
+                    muxmap.insert(bus, MuxState::Unknown);
+                    err
+                })?;
 
-            if current.0 != id {
-                //
-                // We are switching away from the old mux.  We need to find
-                // it and disable all segments on it.
-                //
-                find_mux(
-                    controller,
-                    port,
-                    muxes,
-                    Some(current),
-                    |old, _, _| {
-                        old.driver.enable_segment(old, controller, None, ctrl)
-                    },
-                )?;
-            }
+            //
+            // We have succeeded, and we are in a known state with our
+            // desired mux+segment correctly enabled.  Update our muxmap!
+            //
+            muxmap.insert(bus, MuxState::Enabled(id, segment));
+            Ok(())
+        })?;
+    }
 
-            // Beyond this point, we want any failure to set our new
-            // mux+segment to leave our mux+segment unset rather than having
-            // it point to the old mux+segment.
-            map.remove((controller.controller, port));
-        }
-
-        // If we're here, our mux is valid, but the current segment is
-        // not the specfied segment; we will now call upon our
-        // driver to enable this segment.
-        mux.driver
-            .enable_segment(mux, controller, Some(segment), ctrl)?;
-        map.insert((controller.controller, port), (id, segment));
-
-        Ok(())
-    })
+    Ok(())
 }
 
 #[derive(Copy, Clone, PartialEq)]
 enum Trace {
-    Error, // ringbuf line indicates error location
-    Reset(Controller, PortIndex),
-    ResetMux(Mux),
-    SegmentFailed(ResponseCode),
-    ConfigureFailed(ResponseCode),
+    SegmentOnError((Mux, Segment)),
+    Error(u8, ResponseCodeU8),
+    MuxError(ResponseCodeU8),
+    Reset((Controller, PortIndex)),
+    MuxUnknown((Controller, PortIndex)),
+    MuxUnknownRecover((Controller, PortIndex)),
+    MuxMissing(u8),
+    ResetMux(u8),
+    SegmentFailed(ResponseCodeU8),
+    ConfigureFailed(ResponseCodeU8),
+    Wiggles(u8),
     None,
 }
 
-ringbuf!(Trace, 8, Trace::None);
+ringbuf!(Trace, 174, Trace::None);
 
-fn reset_if_needed(
-    code: ResponseCode,
+fn reset(
     controller: &I2cController<'_>,
     port: PortIndex,
     muxes: &[I2cMux<'_>],
-    mux: Option<(Mux, Segment)>,
+    muxmap: &mut MuxMap,
 ) {
-    match code {
-        ResponseCode::BusLocked
-        | ResponseCode::BusLockedMux
-        | ResponseCode::BusReset
-        | ResponseCode::BusResetMux
-        | ResponseCode::BusError
-        | ResponseCode::ControllerLocked => {}
-        _ => {
-            return;
-        }
-    }
-
-    ringbuf_entry!(Trace::Reset(controller.controller, port));
+    let bus = (controller.controller, port);
+    ringbuf_entry!(Trace::Reset(bus));
 
     let sys = SYS.get_task_id();
     let sys = Sys::from(sys);
@@ -178,23 +257,66 @@ fn reset_if_needed(
     // First, bounce our I2C controller
     controller.reset();
 
-    // And now reset the mux, eating any errors.
-    let _ = find_mux(controller, port, muxes, mux, |mux, id, _| {
-        ringbuf_entry!(Trace::ResetMux(id));
-        mux.driver.reset(mux, &sys)?;
+    // And now reset all muxes on this bus, eating any errors.
+    let _ = all_muxes(controller, port, muxes, |mux| {
+        ringbuf_entry!(Trace::ResetMux(mux.address));
+        let _ = mux.driver.reset(mux, &sys);
+
+        //
+        // We now consider ourselves to be in an Unknown state:  it will
+        // be up to the next transaction on this bus to properly set the
+        // mux state.
+        //
+        muxmap.insert(bus, MuxState::Unknown);
         Ok(())
     });
+}
+
+fn reset_needed(code: ResponseCode) -> bool {
+    matches!(
+        code,
+        ResponseCode::BusLocked
+            | ResponseCode::BusLockedMux
+            | ResponseCode::BusReset
+            | ResponseCode::BusResetMux
+            | ResponseCode::BusError
+            | ResponseCode::ControllerBusy
+    )
+}
+
+fn reset_if_needed(
+    code: ResponseCode,
+    controller: &I2cController<'_>,
+    port: PortIndex,
+    muxes: &[I2cMux<'_>],
+    muxmap: &mut MuxMap,
+) {
+    if reset_needed(code) {
+        reset(controller, port, muxes, muxmap)
+    }
 }
 
 include!(concat!(env!("OUT_DIR"), "/i2c_config.rs"));
 
 type PortMap = FixedMap<Controller, PortIndex, { i2c_config::NCONTROLLERS }>;
 
-type MuxMap = FixedMap<
-    (Controller, PortIndex),
-    (Mux, Segment),
-    { i2c_config::NMUXEDBUSES },
->;
+#[derive(Copy, Clone, Debug)]
+enum MuxState {
+    /// a mux+segment have been explicitly enabled
+    Enabled(Mux, Segment),
+
+    /// state is unknown: zero, one, or more mux+segment(s) may be enabled
+    Unknown,
+}
+
+///
+/// Contains the mux state on a per-bus basis.  If no mux+segment is enabled
+/// for a bus (that is, if any/all muxes on a bus have been explicitly had
+/// all segments disabled), there will not be an entry for the bus in this
+/// map.
+///
+type MuxMap =
+    FixedMap<(Controller, PortIndex), MuxState, { i2c_config::NMUXEDBUSES }>;
 
 #[export_name = "main"]
 fn main() -> ! {
@@ -223,14 +345,27 @@ fn main() -> ! {
         },
     };
 
-    configure_muxes(&muxes, &controllers, &pins, &mut portmap, &ctrl);
+    configure_muxes(
+        &muxes,
+        &controllers,
+        &pins,
+        &mut portmap,
+        &mut muxmap,
+        &ctrl,
+    );
 
     loop {
         hl::recv_without_notification(&mut buffer, |op, msg| match op {
             Op::WriteRead | Op::WriteReadBlock => {
+                let lease_count = msg.lease_count();
+
                 let (payload, caller) = msg
-                    .fixed_with_leases::<[u8; 4], usize>(2)
+                    .fixed::<[u8; 4], usize>()
                     .ok_or(ResponseCode::BadArg)?;
+
+                if lease_count < 2 || lease_count % 2 != 0 {
+                    return Err(ResponseCode::IllegalLeaseCount);
+                }
 
                 let (addr, controller, port, mux) =
                     Marshal::unmarshal(payload)?;
@@ -254,66 +389,103 @@ fn main() -> ! {
                 ) {
                     Ok(_) => {}
                     Err(code) => {
-                        ringbuf_entry!(Trace::Error);
-                        reset_if_needed(code, controller, port, &muxes, mux);
+                        ringbuf_entry!(Trace::MuxError(code.into()));
+                        reset_if_needed(
+                            code,
+                            controller,
+                            port,
+                            &muxes,
+                            &mut muxmap,
+                        );
                         return Err(code);
                     }
                 }
 
-                let wbuf = caller.borrow(0);
-                let winfo = wbuf.info().ok_or(ResponseCode::BadArg)?;
+                let mut total = 0;
 
-                if !winfo.attributes.contains(LeaseAttributes::READ) {
-                    return Err(ResponseCode::BadArg);
-                }
+                //
+                // Now iterate over our write/read pairs (we have already
+                // verified that we have an even number of leases).
+                //
+                for i in (0..lease_count).step_by(2) {
+                    let wbuf = caller.borrow(i);
+                    let winfo = wbuf.info().ok_or(ResponseCode::BadArg)?;
 
-                let rbuf = caller.borrow(1);
-                let rinfo = rbuf.info().ok_or(ResponseCode::BadArg)?;
+                    if !winfo.attributes.contains(LeaseAttributes::READ) {
+                        return Err(ResponseCode::BadArg);
+                    }
 
-                if winfo.len == 0 && rinfo.len == 0 {
-                    // We must have either a write OR a read -- while perhaps
-                    // valid to support both being zero as a way of testing an
-                    // address for a NACK, it's not a mode that we (currently)
-                    // support.
-                    return Err(ResponseCode::BadArg);
-                }
+                    let rbuf = caller.borrow(i + 1);
+                    let rinfo = rbuf.info().ok_or(ResponseCode::BadArg)?;
 
-                if winfo.len > 255 || rinfo.len > 255 {
-                    // For now, we don't support writing or reading more than
-                    // 255 bytes.
-                    return Err(ResponseCode::BadArg);
-                }
+                    if winfo.len == 0 && rinfo.len == 0 {
+                        // In a given lease pair, we must have either a write
+                        // OR a read -- while perhaps valid to support both
+                        // being zero as a way of testing an address for a
+                        // NACK, it's not a mode that we (currently) support.
+                        return Err(ResponseCode::BadArg);
+                    }
 
-                let mut nread = 0;
+                    if winfo.len > 255 || rinfo.len > 255 {
+                        // For now, we don't support writing or reading more
+                        // than 255 bytes.
+                        return Err(ResponseCode::BadArg);
+                    }
 
-                match controller.write_read(
-                    addr,
-                    winfo.len,
-                    |pos| wbuf.read_at(pos),
-                    if op == Op::WriteRead {
-                        ReadLength::Fixed(rinfo.len)
-                    } else {
-                        ReadLength::Variable
-                    },
-                    |pos, byte| {
-                        if pos + 1 > nread {
-                            nread = pos + 1;
+                    let mut nread = 0;
+
+                    match controller.write_read(
+                        addr,
+                        winfo.len,
+                        |pos| wbuf.read_at(pos),
+                        // Only the final read operation in a WriteReadBlock is
+                        // a block read; everything else is a normal read.
+                        if op == Op::WriteReadBlock && i == lease_count - 2 {
+                            ReadLength::Variable
+                        } else {
+                            ReadLength::Fixed(rinfo.len)
+                        },
+                        |pos, byte| {
+                            if pos + 1 > nread {
+                                nread = pos + 1;
+                            }
+
+                            rbuf.write_at(pos, byte)
+                        },
+                        &ctrl,
+                    ) {
+                        Err(code) => {
+                            //
+                            // NoDevice errors aren't hugely interesting --
+                            // but on any other error, we want to record the
+                            // address of the failing device, the error code
+                            // and the mux+segment (if specified).
+                            //
+                            if code != ResponseCode::NoDevice {
+                                ringbuf_entry!(Trace::Error(addr, code.into()));
+
+                                if let Some(mux) = mux {
+                                    ringbuf_entry!(Trace::SegmentOnError(mux));
+                                }
+                            }
+
+                            reset_if_needed(
+                                code,
+                                controller,
+                                port,
+                                &muxes,
+                                &mut muxmap,
+                            );
+                            return Err(code);
                         }
-
-                        rbuf.write_at(pos, byte)
-                    },
-                    &ctrl,
-                ) {
-                    Err(code) => {
-                        ringbuf_entry!(Trace::Error);
-                        reset_if_needed(code, controller, port, &muxes, mux);
-                        Err(code)
-                    }
-                    Ok(_) => {
-                        caller.reply(nread);
-                        Ok(())
+                        Ok(_) => {
+                            total += nread;
+                        }
                     }
                 }
+
+                caller.reply(total);
+                Ok(())
             }
         });
     }
@@ -338,7 +510,7 @@ fn configure_port(
     map: &mut PortMap,
     controller: &I2cController<'_>,
     port: PortIndex,
-    pins: &[I2cPin],
+    pins: &[I2cPins],
 ) {
     let current = map.get(controller.controller).unwrap();
 
@@ -360,33 +532,133 @@ fn configure_port(
         if pin.port == current {
             //
             // We de-configure our current port by setting the pins to
-            // `Mode::input`, which will assure that we don't leave SCL and
-            // SDA pulled high.
+            // `Mode::Analog`, which tristates them and disables the input
+            // buffer so the I2C peripheral doesn't respond to their state.
             //
-            sys.gpio_configure_input(pin.gpio_pins, Pull::None).unwrap();
+            // At the same time, we leave the alternate function mux set to the
+            // I2C device to prevent glitching when we turn the port back on.
+            //
+            // This is a slightly unusual operation that lacks a convenience
+            // operation in the GPIO API, so we do it longhand:
+            //
+            for gpio_pin in &[pin.scl, pin.sda] {
+                sys.gpio_configure(
+                    gpio_pin.port,
+                    gpio_pin.pin_mask,
+                    Mode::Analog,
+                    OutputType::OpenDrain,
+                    Speed::Low,
+                    Pull::None,
+                    pin.function,
+                );
+            }
         } else if pin.port == port {
-            // Configure our new port!
-            sys.gpio_configure_alternate(
-                pin.gpio_pins,
-                OutputType::OpenDrain,
-                Speed::High,
-                Pull::None,
-                pin.function,
-            )
-            .unwrap();
+            for gpio_pin in &[pin.scl, pin.sda] {
+                // Configure our new port!
+                sys.gpio_configure_alternate(
+                    *gpio_pin,
+                    OutputType::OpenDrain,
+                    Speed::Low,
+                    Pull::None,
+                    pin.function,
+                );
+            }
         }
     }
 
     map.insert(controller.controller, port);
 }
 
+///
+/// When the system is reset without power loss, I2C can be in an arbitrary
+/// state with respect to the bus -- and we can therefore come to life with a
+/// transaction already in flight.  It is very important that we abort any
+/// such transaction:  failure to do so will result in our first I2C
+/// transaction being corrupted.  (And especially because our first I2C
+/// transactions may well be to disable segments on a mux, this can result in
+/// nearly arbitrary mayhem down the road!)  To do this, we engage in the
+/// time-honored[0] tradition of "clocking through the problem":  wiggling SCL
+/// until we see SDA high, and then pulling SDA low and releasing SCL to
+/// indicate a STOP condition.  (Note that we need to do this up to 9 times to
+/// assure that we have clocked through the entire transaction.)
+///
+/// [0] Analog Devices. AN-686: Implementing an I2C Reset. 2003.
+///
+fn wiggle_scl(sys: &Sys, scl: PinSet, sda: PinSet) {
+    let mut wiggles = 0_u8;
+    sys.gpio_set(scl);
+
+    sys.gpio_configure_output(
+        scl,
+        OutputType::OpenDrain,
+        Speed::Low,
+        Pull::None,
+    );
+
+    for _ in 0..9 {
+        sys.gpio_set(sda);
+
+        sys.gpio_configure_output(
+            sda,
+            OutputType::OpenDrain,
+            Speed::Low,
+            Pull::None,
+        );
+
+        sys.gpio_configure_input(sda, Pull::None);
+
+        if sys.gpio_read(sda) == 0 {
+            //
+            // SDA is low -- someone is holding it down: give SCL a wiggle to
+            // try to shake them.  Note that we don't sleep here:  we are
+            // relying on the fact that communicating to the GPIO task is going
+            // to take longer than our minimum SCL pulse.  (Which, on a 400 MHz
+            // H753, is on the order of ~15 usecs -- yielding a cycle time of
+            // ~30 usecs or ~33 KHz.)
+            //
+            sys.gpio_reset(scl);
+            sys.gpio_set(scl);
+            wiggles = wiggles.wrapping_add(1);
+        } else {
+            //
+            // SDA is high. We're going to flip it back to an output, pull the
+            // clock down then, pull SDA down, then release SCL and finally
+            // release SDA.  This will denote a STOP condition.
+            //
+            sys.gpio_set(sda);
+
+            sys.gpio_configure_output(
+                sda,
+                OutputType::OpenDrain,
+                Speed::Low,
+                Pull::None,
+            );
+
+            sys.gpio_reset(scl);
+            sys.gpio_reset(sda);
+            sys.gpio_set(scl);
+            sys.gpio_set(sda);
+        }
+    }
+
+    ringbuf_entry!(Trace::Wiggles(wiggles));
+}
+
 fn configure_pins(
     controllers: &[I2cController<'_>],
-    pins: &[I2cPin],
+    pins: &[I2cPins],
     map: &mut PortMap,
 ) {
     let sys = SYS.get_task_id();
     let sys = Sys::from(sys);
+
+    //
+    // Before we configure our pins, wiggle SCL to shake off any old
+    // transaction.
+    //
+    for pin in pins {
+        wiggle_scl(&sys, pin.scl, pin.sda);
+    }
 
     for pin in pins {
         let controller =
@@ -396,21 +668,35 @@ fn configure_pins(
             Some(port) if port != pin.port => {
                 //
                 // If we have already enabled this controller with a different
-                // port, we don't want to enable this pin.
+                // port, we want to set this pin to its unselected state to
+                // prevent glitches when we first use it.
                 //
+                for gpio_pin in &[pin.scl, pin.sda] {
+                    sys.gpio_configure(
+                        gpio_pin.port,
+                        gpio_pin.pin_mask,
+                        Mode::Analog,
+                        OutputType::OpenDrain,
+                        Speed::Low,
+                        Pull::None,
+                        pin.function,
+                    );
+                }
+
                 continue;
             }
             _ => {}
         }
 
-        sys.gpio_configure_alternate(
-            pin.gpio_pins,
-            OutputType::OpenDrain,
-            Speed::High,
-            Pull::None,
-            pin.function,
-        )
-        .unwrap();
+        for gpio_pin in &[pin.scl, pin.sda] {
+            sys.gpio_configure_alternate(
+                *gpio_pin,
+                OutputType::OpenDrain,
+                Speed::Low,
+                Pull::None,
+                pin.function,
+            );
+        }
 
         map.insert(controller.controller, pin.port);
     }
@@ -419,8 +705,9 @@ fn configure_pins(
 fn configure_muxes(
     muxes: &[I2cMux<'_>],
     controllers: &[I2cController<'_>],
-    pins: &[I2cPin],
+    pins: &[I2cPins],
     map: &mut PortMap,
+    muxmap: &mut MuxMap,
     ctrl: &I2cControl,
 ) {
     let sys = SYS.get_task_id();
@@ -431,28 +718,66 @@ fn configure_muxes(
             lookup_controller(controllers, mux.controller).unwrap();
         configure_port(map, controller, mux.port, pins);
 
+        let mut reset_attempted = false;
+
         loop {
             match mux.driver.configure(mux, controller, &sys, ctrl) {
                 Ok(_) => {
                     //
-                    // We are going to attempt to disable all segments -- but
-                    // we are also going to need to eat the error here if
-                    // we get one:  it's possible that the mux itself is
-                    // powered off.
+                    // We are going to attempt to disable all segments.  If we
+                    // get an error here and that error indicates that we need
+                    // to reset the controller, we will do so, but only once:
+                    // if the mux has segments that are in a different power
+                    // domain, it is conceivable that we will get what appears
+                    // to be hung bus that will not be resolved by us
+                    // resetting the controller -- and we don't want to spin
+                    // forever here.  If we can't manage to get the segments
+                    // disabled, we will put the bus into an unknown mux state
+                    // -- which means a bus will be in the unknown state if we
+                    // fail to disable all segments for all of its muxes.
+                    //
+                    // In terms of why we might see a resolvable reset: we
+                    // have noticed an issue whereby the first I2C transaction
+                    // on some busses (notably, those that share controllers
+                    // via pin muxing) will result in SCL being spuriously
+                    // held down (see #1034 for details).  Resets of the I2C
+                    // controller seem to always resolve the issue, so we want
+                    // to do that reset now if we see a condition that
+                    // indicates it:  we don't want to allow it to lie in wait
+                    // for the first I2C transaction (which may or may not
+                    // deal with the reset).
                     //
                     if let Err(code) =
                         mux.driver.enable_segment(mux, controller, None, ctrl)
                     {
-                        ringbuf_entry!(Trace::SegmentFailed(code));
+                        ringbuf_entry!(Trace::SegmentFailed(code.into()));
+
+                        if reset_needed(code) && !reset_attempted {
+                            reset(controller, mux.port, muxes, muxmap);
+                            reset_attempted = true;
+                            continue;
+                        }
+
+                        //
+                        // We have failed, and then failed again after the
+                        // reset.  Mark the bus as being in an unknown mux
+                        // state, which will prevent its use until it's
+                        // resolved.
+                        //
+                        let bus = (controller.controller, mux.port);
+                        ringbuf_entry!(Trace::MuxUnknown(bus));
+                        muxmap.insert(bus, MuxState::Unknown);
                     }
 
                     break;
                 }
                 Err(code) => {
-                    ringbuf_entry!(Trace::ConfigureFailed(code));
-                    reset_if_needed(code, controller, mux.port, muxes, None);
+                    ringbuf_entry!(Trace::ConfigureFailed(code.into()));
+                    reset_if_needed(code, controller, mux.port, muxes, muxmap);
                 }
             }
         }
     }
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

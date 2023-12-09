@@ -26,13 +26,26 @@
 //! Toggles an LED by index.
 //!
 //! Request message format: single `u32` giving LED index.
+//!
+//! ## `led_blink` (4)
+//!
+//! Sets an LED to blink, specifying the LED by index
+//!
+//! Request message format: single `u32` giving LED index.
 
 #![no_std]
 #![no_main]
 
 use drv_user_leds_api::LedError;
+use enum_map::EnumMap;
 use idol_runtime::RequestError;
 use userlib::*;
+
+task_config::optional_task_config! {
+    blink_at_start: &'static [Led],
+}
+
+const BLINK_INTERVAL: u64 = 500;
 
 cfg_if::cfg_if! {
     // Target boards with 4 leds
@@ -41,7 +54,7 @@ cfg_if::cfg_if! {
             target_board = "gimletlet-1",
             target_board = "gimletlet-2"
         ))] {
-        #[derive(FromPrimitive)]
+        #[derive(enum_map::Enum, Copy, Clone, FromPrimitive)]
         enum Led {
             Zero = 0,
             One = 1,
@@ -51,7 +64,7 @@ cfg_if::cfg_if! {
     }
     // Target boards with 3 leds
     else if #[cfg(any(target_board = "nucleo-h753zi", target_board = "nucleo-h743zi2"))] {
-        #[derive(FromPrimitive)]
+        #[derive(enum_map::Enum, Copy, Clone, FromPrimitive)]
         enum Led {
             Zero = 0,
             One = 1,
@@ -59,15 +72,29 @@ cfg_if::cfg_if! {
         }
     }
     // Target boards with 1 led
-    else if #[cfg(any(target_board = "stm32g031-nucleo", target_board = "stm32g070", target_board = "stm32g0b1", target_board = "donglet-g030", target_board = "donglet-g031"))] {
-        #[derive(FromPrimitive)]
+    else if #[cfg(any(
+        target_board = "stm32g031-nucleo",
+        target_board = "stm32g070",
+        target_board = "stm32g0b1",
+        target_board = "donglet-g030",
+        target_board = "donglet-g031",
+        target_board = "gimlet-b",
+        target_board = "gimlet-c",
+        target_board = "gimlet-d",
+        target_board = "gimlet-e",
+        target_board = "psc-a",
+        target_board = "psc-b",
+        target_board = "psc-c",
+        target_board = "oxcon2023g0",
+    ))] {
+        #[derive(enum_map::Enum, Copy, Clone, FromPrimitive)]
         enum Led {
             Zero = 0,
         }
     }
     // Target boards with 2 leds -> the rest
     else {
-        #[derive(FromPrimitive)]
+        #[derive(enum_map::Enum, Copy, Clone, FromPrimitive)]
         enum Led {
             Zero = 0,
             One = 1,
@@ -75,7 +102,9 @@ cfg_if::cfg_if! {
     }
 }
 
-struct ServerImpl;
+struct ServerImpl {
+    blinking: EnumMap<Led, bool>,
+}
 
 impl idl::InOrderUserLedsImpl for ServerImpl {
     fn led_on(
@@ -84,6 +113,7 @@ impl idl::InOrderUserLedsImpl for ServerImpl {
         index: usize,
     ) -> Result<(), RequestError<LedError>> {
         let led = Led::from_usize(index).ok_or(LedError::NotPresent)?;
+        self.blinking[led] = false;
         led_on(led);
         Ok(())
     }
@@ -93,6 +123,7 @@ impl idl::InOrderUserLedsImpl for ServerImpl {
         index: usize,
     ) -> Result<(), RequestError<LedError>> {
         let led = Led::from_usize(index).ok_or(LedError::NotPresent)?;
+        self.blinking[led] = false;
         led_off(led);
         Ok(())
     }
@@ -102,8 +133,50 @@ impl idl::InOrderUserLedsImpl for ServerImpl {
         index: usize,
     ) -> Result<(), RequestError<LedError>> {
         let led = Led::from_usize(index).ok_or(LedError::NotPresent)?;
+        self.blinking[led] = false;
         led_toggle(led);
         Ok(())
+    }
+    fn led_blink(
+        &mut self,
+        _: &RecvMessage,
+        index: usize,
+    ) -> Result<(), RequestError<LedError>> {
+        let led = Led::from_usize(index).ok_or(LedError::NotPresent)?;
+        let any_blinking = self.blinking.values().any(|b| *b);
+        self.blinking[led] = true;
+
+        if !any_blinking {
+            sys_set_timer(
+                Some(sys_get_timer().now + BLINK_INTERVAL),
+                notifications::TIMER_MASK,
+            );
+        }
+        Ok(())
+    }
+}
+
+impl idol_runtime::NotificationHandler for ServerImpl {
+    fn current_notification_mask(&self) -> u32 {
+        notifications::TIMER_MASK
+    }
+
+    fn handle_notification(&mut self, bits: u32) {
+        if bits & notifications::TIMER_MASK != 0 {
+            let mut any_blinking = false;
+            for (led, blinking) in &self.blinking {
+                if *blinking {
+                    any_blinking = true;
+                    led_toggle(led);
+                }
+            }
+            if any_blinking {
+                sys_set_timer(
+                    Some(sys_get_timer().now + BLINK_INTERVAL),
+                    notifications::TIMER_MASK,
+                );
+            }
+        }
     }
 }
 
@@ -113,9 +186,21 @@ fn main() -> ! {
 
     // Handle messages.
     let mut incoming = [0u8; idl::INCOMING_SIZE];
-    let mut serverimpl = ServerImpl;
+    let mut blinking: EnumMap<Led, bool> = Default::default();
+    if let Some(config) = TASK_CONFIG {
+        for &led in config.blink_at_start {
+            blinking[led] = true;
+        }
+        if !config.blink_at_start.is_empty() {
+            sys_set_timer(
+                Some(sys_get_timer().now + BLINK_INTERVAL),
+                notifications::TIMER_MASK,
+            );
+        }
+    }
+    let mut server = ServerImpl { blinking };
     loop {
-        idol_runtime::dispatch(&mut incoming, &mut serverimpl);
+        idol_runtime::dispatch_n(&mut incoming, &mut server);
     }
 }
 
@@ -277,6 +362,10 @@ cfg_if::cfg_if! {
                     target_board = "donglet-g031"
                 ))] {
                     (drv_stm32xx_sys_api::Port::A.pin(12), true)
+                } else if #[cfg(any(
+                    target_board = "oxcon2023g0",
+                ))] {
+                    (drv_stm32xx_sys_api::Port::B.pin(7), true)
                 } else {
                     (drv_stm32xx_sys_api::Port::A.pin(5), true)
                 }
@@ -295,15 +384,14 @@ fn enable_led_pins() {
 
     for &(pinset, active_low) in LEDS {
         // Make sure LEDs are initially off.
-        sys.gpio_set_to(pinset, active_low).unwrap();
+        sys.gpio_set_to(pinset, active_low);
         // Make them outputs.
         sys.gpio_configure_output(
             pinset,
             OutputType::PushPull,
             Speed::High,
             Pull::None,
-        )
-        .unwrap();
+        );
     }
 }
 
@@ -322,7 +410,7 @@ fn led_on(led: Led) {
     let sys = Sys::from(sys);
 
     let (pinset, active_low) = led_info(led);
-    sys.gpio_set_to(pinset, !active_low).unwrap();
+    sys.gpio_set_to(pinset, !active_low);
 }
 
 #[cfg(feature = "stm32g0")]
@@ -334,7 +422,7 @@ fn led_off(led: Led) {
 
     let (pinset, active_low) = led_info(led);
 
-    sys.gpio_set_to(pinset, active_low).unwrap();
+    sys.gpio_set_to(pinset, active_low);
 }
 
 #[cfg(feature = "stm32g0")]
@@ -345,7 +433,7 @@ fn led_toggle(led: Led) {
     let sys = Sys::from(sys);
 
     let pinset = led_info(led).0;
-    sys.gpio_toggle(pinset.port, pinset.pin_mask).unwrap();
+    sys.gpio_toggle(pinset.port, pinset.pin_mask).unwrap_lite();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -394,6 +482,17 @@ cfg_if::cfg_if! {
                     (drv_stm32xx_sys_api::Port::G.pin(4), false),
                     (drv_stm32xx_sys_api::Port::G.pin(5), false),
                 ];
+            } else if #[cfg(any(target_board = "gimlet-b",
+                                target_board = "gimlet-c",
+                                target_board = "gimlet-d",
+                                target_board = "gimlet-e",
+                                target_board = "psc-a",
+                                target_board = "psc-b",
+                                target_board = "psc-c",
+            ))] {
+                const LEDS: &[(drv_stm32xx_sys_api::PinSet, bool)] = &[
+                    (drv_stm32xx_sys_api::Port::A.pin(3), false),
+                ];
             } else {
                 compile_error!("no LED mapping for unknown board");
             }
@@ -410,15 +509,14 @@ fn enable_led_pins() {
 
     for &(pinset, active_low) in LEDS {
         // Make sure LEDs are initially off.
-        sys.gpio_set_to(pinset, active_low).unwrap();
+        sys.gpio_set_to(pinset, active_low);
         // Make them outputs.
         sys.gpio_configure_output(
             pinset,
             OutputType::PushPull,
             Speed::High,
             Pull::None,
-        )
-        .unwrap();
+        );
     }
 }
 
@@ -426,6 +524,16 @@ fn enable_led_pins() {
 fn led_info(led: Led) -> (drv_stm32xx_sys_api::PinSet, bool) {
     match led {
         Led::Zero => LEDS[0],
+        #[cfg(any(
+            target_board = "gemini-bu-1",
+            target_board = "gimletlet-1",
+            target_board = "gimletlet-2",
+            target_board = "nucleo-h753zi",
+            target_board = "nucleo-h743zi2",
+            target_board = "gemini-bu-1",
+            target_board = "gimletlet-1",
+            target_board = "gimletlet-2",
+        ))]
         Led::One => LEDS[1],
         #[cfg(any(
             target_board = "gemini-bu-1",
@@ -452,7 +560,7 @@ fn led_on(led: Led) {
     let sys = Sys::from(sys);
 
     let (pinset, active_low) = led_info(led);
-    sys.gpio_set_to(pinset, !active_low).unwrap();
+    sys.gpio_set_to(pinset, !active_low);
 }
 
 #[cfg(feature = "stm32h7")]
@@ -464,7 +572,7 @@ fn led_off(led: Led) {
 
     let (pinset, active_low) = led_info(led);
 
-    sys.gpio_set_to(pinset, active_low).unwrap();
+    sys.gpio_set_to(pinset, active_low);
 }
 
 #[cfg(feature = "stm32h7")]
@@ -475,7 +583,7 @@ fn led_toggle(led: Led) {
     let sys = Sys::from(sys);
 
     let pinset = led_info(led).0;
-    sys.gpio_toggle(pinset.port, pinset.pin_mask).unwrap();
+    sys.gpio_toggle(pinset.port, pinset.pin_mask).unwrap_lite();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -522,39 +630,33 @@ fn enable_led_pins() {
     let gpio_driver = GPIO.get_task_id();
     let gpio_driver = Pins::from(gpio_driver);
 
-    gpio_driver
-        .iocon_configure(
-            LED_ZERO_PIN,
-            AltFn::Alt0,
-            Mode::NoPull,
-            Slew::Standard,
-            Invert::Disable,
-            Digimode::Digital,
-            Opendrain::Normal,
-        )
-        .unwrap();
+    gpio_driver.iocon_configure(
+        LED_ZERO_PIN,
+        AltFn::Alt0,
+        Mode::NoPull,
+        Slew::Standard,
+        Invert::Disable,
+        Digimode::Digital,
+        Opendrain::Normal,
+    );
 
-    gpio_driver
-        .iocon_configure(
-            LED_ONE_PIN,
-            AltFn::Alt0,
-            Mode::NoPull,
-            Slew::Standard,
-            Invert::Disable,
-            Digimode::Digital,
-            Opendrain::Normal,
-        )
-        .unwrap();
+    gpio_driver.iocon_configure(
+        LED_ONE_PIN,
+        AltFn::Alt0,
+        Mode::NoPull,
+        Slew::Standard,
+        Invert::Disable,
+        Digimode::Digital,
+        Opendrain::Normal,
+    );
 
     // Both LEDs are active low -- so they will light when we set the
     // direction of the pin if we don't explicitly turn them off first
     led_off(Led::Zero);
     led_off(Led::One);
 
-    gpio_driver
-        .set_dir(LED_ZERO_PIN, Direction::Output)
-        .unwrap();
-    gpio_driver.set_dir(LED_ONE_PIN, Direction::Output).unwrap();
+    gpio_driver.set_dir(LED_ZERO_PIN, Direction::Output);
+    gpio_driver.set_dir(LED_ONE_PIN, Direction::Output);
 }
 
 #[cfg(feature = "lpc55")]
@@ -563,7 +665,7 @@ fn led_on(led: Led) {
     let gpio_driver = drv_lpc55_gpio_api::Pins::from(gpio_driver);
 
     let pin = led_gpio_num(led);
-    gpio_driver.set_val(pin, LED_ON_VAL).unwrap();
+    gpio_driver.set_val(pin, LED_ON_VAL);
 }
 
 #[cfg(feature = "lpc55")]
@@ -572,7 +674,7 @@ fn led_off(led: Led) {
     let gpio_driver = drv_lpc55_gpio_api::Pins::from(gpio_driver);
 
     let pin = led_gpio_num(led);
-    gpio_driver.set_val(pin, LED_OFF_VAL).unwrap();
+    gpio_driver.set_val(pin, LED_OFF_VAL);
 }
 
 #[cfg(feature = "lpc55")]
@@ -581,7 +683,7 @@ fn led_toggle(led: Led) {
     let gpio_driver = drv_lpc55_gpio_api::Pins::from(gpio_driver);
 
     let pin = led_gpio_num(led);
-    gpio_driver.toggle(pin).unwrap();
+    gpio_driver.toggle(pin).unwrap_lite();
 }
 
 mod idl {
@@ -589,3 +691,5 @@ mod idl {
 
     include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

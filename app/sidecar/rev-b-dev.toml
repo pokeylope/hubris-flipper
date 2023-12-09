@@ -1,0 +1,2 @@
+name = "sidecar-b-dev"
+inherit = ["rev-b.toml", "dev.toml"]

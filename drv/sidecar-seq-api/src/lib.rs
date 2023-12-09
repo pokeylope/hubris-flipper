@@ -8,22 +8,34 @@
 
 use derive_idol_err::IdolError;
 use drv_fpga_api::FpgaError;
-pub use drv_sidecar_mainboard_controller::tofino2::{
-    TofinoPcieReset, TofinoSeqError, TofinoSeqState,
+pub use drv_sidecar_mainboard_controller::{
+    fan_modules::{FanModuleStatus, NUM_FAN_MODULES},
+    tofino2::{
+        DebugPortState, DirectBarSegment, SpiEepromInstruction,
+        TofinoPcieReset, TofinoPowerRail, TofinoSeqError, TofinoSeqState,
+        TofinoSeqStep,
+    },
 };
+
+use hubpack::SerializedSize;
+use serde::{Deserialize, Serialize};
 use userlib::*;
 use zerocopy::AsBytes;
 
 #[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq, IdolError)]
 pub enum SeqError {
     FpgaError = 1,
-    IllegalTransition = 2,
-    ClockConfigurationFailed = 3,
-    SequencerError = 4,
-    SequencerTimeout = 5,
-    InvalidTofinoVid = 6,
-    SetVddCoreVoutFailed = 7,
-    NoFrontIOBoard = 8,
+    IllegalTransition,
+    ClockConfigurationFailed,
+    SequencerError,
+    SequencerTimeout,
+    InvalidTofinoVid,
+    SetVddCoreVoutFailed,
+    NoFrontIOBoard,
+    FrontIOBoardPowerFault,
+
+    #[idol(server_death)]
+    ServerRestarted,
 }
 
 impl From<FpgaError> for SeqError {
@@ -39,5 +51,12 @@ pub enum TofinoSequencerPolicy {
     LatchOffOnFault = 1,
     RestartOnFault = 2,
 }
+
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Deserialize, Serialize, SerializedSize,
+)]
+pub struct FanModulePresence(pub [bool; NUM_FAN_MODULES]);
+
+pub use drv_sidecar_mainboard_controller::fan_modules::FanModuleIndex;
 
 include!(concat!(env!("OUT_DIR"), "/client_stub.rs"));

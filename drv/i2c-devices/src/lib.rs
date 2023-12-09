@@ -11,14 +11,23 @@
 //! - [`at24csw080`]: AT24CSW080 serial EEPROM
 //! - [`ds2482`]: DS2482-100 1-wire initiator
 //! - [`isl68224`]: ISL68224 power controller
+//! - [`ltc4282`]: LTC4282 high current hot swap controller
 //! - [`lp5562`]: LP5562 LED controller
+//! - [`m24c02`]: M24C02 EEPROM, used in MWOCP68 power shelf
+//! - [`m2_hp_only`]: M.2 drive; identical to `nvme_bmc`, with the limitation
+//!   that communication is **only allowed** when the device is known to be
+//!   powered (at the cost of locking up the I2C bus if you get it wrong).
 //! - [`max5970`]: MAX5970 hot swap controller
 //! - [`max6634`]: MAX6634 temperature sensor
 //! - [`max31790`]: MAX31790 fan controller
 //! - [`mcp9808`]: MCP9808 temperature sensor
+//! - [`mwocp68`]: Murata power shelf
+//! - [`nvme_bmc`]: NVMe basic management control
 //! - [`pca9538`]: PCA9538 GPIO expander
+//! - [`pca9956b`]: PCA9956B LED driver
 //! - [`pct2075`]: PCT2075 temperature sensor
 //! - [`raa229618`]: RAA229618 power controller
+//! - [`sbrmi`]: AMD SB-RMI driver
 //! - [`sbtsi`]: AMD SB-TSI temperature sensor
 //! - [`tmp116`]: TMP116 temperature sensor
 //! - [`tmp451`]: TMP451 temperature sensor
@@ -26,6 +35,9 @@
 //! - [`tse2004av`]: TSE2004av SPD EEPROM with temperature sensor
 
 #![no_std]
+
+use drv_i2c_api::{I2cDevice, ResponseCode};
+use pmbus::commands::CommandCode;
 
 macro_rules! pmbus_read {
     ($device:expr, $cmd:ident) => {
@@ -46,40 +58,66 @@ macro_rules! pmbus_read {
         }
     };
 
-    ($device:expr, $dev:ident::$cmd:ident) => {
-        match $dev::$cmd::CommandData::from_slice(&match $device
-            .read_reg::<u8, [u8; $dev::$cmd::CommandData::len()]>(
-                $dev::$cmd::CommandData::code(),
+    ($device:expr, $dev:ident::$cmd:ident) => {{
+        use $dev::$cmd;
+        pmbus_read!($device, $cmd)
+    }};
+}
+
+macro_rules! pmbus_rail_read {
+    ($device:expr, $rail:expr, $cmd:ident) => {{
+        let payload = [PAGE::CommandData::code(), $rail];
+
+        match $cmd::CommandData::from_slice(&match $device
+            .write_read_reg::<u8, [u8; $cmd::CommandData::len()]>(
+                $cmd::CommandData::code(),
+                &payload,
             ) {
             Ok(rval) => Ok(rval),
             Err(code) => Err(Error::BadRead {
-                cmd: $dev::$cmd::CommandData::code(),
+                cmd: $cmd::CommandData::code(),
                 code,
             }),
         }?) {
             Some(data) => Ok(data),
             None => Err(Error::BadData {
-                cmd: $dev::$cmd::CommandData::code(),
+                cmd: $cmd::CommandData::code(),
             }),
-        }
-    };
-}
-
-macro_rules! pmbus_write {
-    ($device:expr, $dev:ident::$cmd:ident, $data:expr) => {{
-        let mut payload = [0u8; $dev::$cmd::CommandData::len() + 1];
-        payload[0] = $dev::$cmd::CommandData::code();
-        $data.to_slice(&mut payload[1..]);
-
-        match $device.write(&payload) {
-            Err(code) => Err(Error::BadWrite {
-                cmd: $dev::$cmd::CommandData::code(),
-                code,
-            }),
-            Ok(_) => Ok(()),
         }
     }};
 
+    ($device:expr, $rail:expr, $dev:ident::$cmd:ident) => {{
+        use $dev::{$cmd, PAGE};
+        pmbus_rail_read!($device, $rail, $cmd)
+    }};
+}
+
+macro_rules! pmbus_rail_phase_read {
+    ($device:expr, $rail:expr, $phase:expr, $cmd:ident) => {{
+        let rail_payload = [PAGE::CommandData::code(), $rail];
+        let phase_payload = [PHASE::CommandData::code(), $phase];
+
+        match $cmd::CommandData::from_slice(&match $device
+            .write_write_read_reg::<u8, [u8; $cmd::CommandData::len()]>(
+                $cmd::CommandData::code(),
+                &rail_payload,
+                &phase_payload,
+            ) {
+            Ok(rval) => Ok(rval),
+            Err(code) => Err(Error::BadRead {
+                cmd: $cmd::CommandData::code(),
+                code,
+            }),
+        }?) {
+            Some(data) => Ok(data),
+            None => Err(Error::BadData {
+                cmd: $cmd::CommandData::code(),
+            }),
+        }
+    }};
+}
+
+macro_rules! pmbus_write {
     ($device:expr, $cmd:ident, $data:expr) => {{
         let mut payload = [0u8; $cmd::CommandData::len() + 1];
         payload[0] = $cmd::CommandData::code();
@@ -93,38 +131,53 @@ macro_rules! pmbus_write {
             Ok(_) => Ok(()),
         }
     }};
+
+    ($device:expr, $dev:ident::$cmd:ident, $data:expr) => {{
+        use $dev::$cmd;
+        pmbus_write!($device, $cmd, $data)
+    }};
 }
 
-macro_rules! pmbus_validate {
-    ($device:expr, $dev:ident::$cmd:ident, $expected:ident) => {{
-        let mut id = [0u8; 16];
+macro_rules! pmbus_rail_write {
+    ($device:expr, $rail:expr, $cmd:ident, $data:expr) => {{
+        let rpayload = [PAGE::CommandData::code(), $rail];
 
-        match $device.read_block::<u8>($dev::CommandCode::$cmd as u8, &mut id) {
-            Ok(size) => {
-                Ok(size == $expected.len()
-                    && id[0..$expected.len()] == $expected)
-            }
-            Err(code) => Err(Error::BadValidation {
-                cmd: CommandCode::$cmd as u8,
+        let mut payload = [0u8; $cmd::CommandData::len() + 1];
+        payload[0] = $cmd::CommandData::code();
+        $data.to_slice(&mut payload[1..]);
+
+        match $device.write_write(&rpayload, &payload) {
+            Err(code) => Err(Error::BadWrite {
+                cmd: $cmd::CommandData::code(),
                 code,
             }),
+            Ok(_) => Ok(()),
         }
     }};
 
-    ($device:expr, $cmd:ident, $expected:ident) => {{
-        let mut id = [0u8; 16];
-
-        match $device.read_block::<u8>(CommandCode::$cmd as u8, &mut id) {
-            Ok(size) => {
-                Ok(size == $expected.len()
-                    && id[0..$expected.len()] == $expected)
-            }
-            Err(code) => Err(Error::BadValidation {
-                cmd: CommandCode::$cmd as u8,
-                code,
-            }),
-        }
+    ($device:expr, $rail:expr, $dev:ident::$cmd:ident, $data:expr) => {{
+        use $dev::{$cmd, PAGE};
+        pmbus_rail_write!($device, $rail, $cmd, $data)
     }};
+}
+
+struct BadValidation {
+    cmd: u8,
+    code: ResponseCode,
+}
+
+fn pmbus_validate<const N: usize>(
+    device: &I2cDevice,
+    cmd: CommandCode,
+    expected: &[u8; N],
+) -> Result<bool, BadValidation> {
+    let mut id = [0u8; N];
+    let cmd = cmd as u8;
+
+    match device.read_block(cmd, &mut id) {
+        Ok(size) => Ok(size == N && id == *expected),
+        Err(code) => Err(BadValidation { cmd, code }),
+    }
 }
 
 pub trait TempSensor<T: core::convert::Into<drv_i2c_api::ResponseCode>> {
@@ -141,6 +194,16 @@ pub trait CurrentSensor<T: core::convert::Into<drv_i2c_api::ResponseCode>> {
 
 pub trait VoltageSensor<T: core::convert::Into<drv_i2c_api::ResponseCode>> {
     fn read_vout(&self) -> Result<userlib::units::Volts, T>;
+}
+
+pub trait InputCurrentSensor<T: core::convert::Into<drv_i2c_api::ResponseCode>>
+{
+    fn read_iin(&self) -> Result<userlib::units::Amperes, T>;
+}
+
+pub trait InputVoltageSensor<T: core::convert::Into<drv_i2c_api::ResponseCode>>
+{
+    fn read_vin(&self) -> Result<userlib::units::Volts, T>;
 }
 
 pub trait Validate<T: core::convert::Into<drv_i2c_api::ResponseCode>> {
@@ -162,14 +225,21 @@ pub mod bmr491;
 pub mod bq25896;
 pub mod ds2482;
 pub mod isl68224;
+pub mod ltc4282;
 pub mod lp5562;
+pub mod m24c02;
+pub mod m2_hp_only;
 pub mod max31790;
 pub mod max5970;
 pub mod max6634;
 pub mod mcp9808;
+pub mod mwocp68;
+pub mod nvme_bmc;
 pub mod pca9538;
+pub mod pca9956b;
 pub mod pct2075;
 pub mod raa229618;
+pub mod sbrmi;
 pub mod sbtsi;
 pub mod tmp117;
 pub mod tmp451;

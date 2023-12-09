@@ -1,21 +1,26 @@
 [package]
 name = "drv-i2c-devices"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-bitfield = "0.13"
-derive-idol-err = {path = "../../lib/derive-idol-err" }
-drv-i2c-api = {path = "../i2c-api"}
-drv-onewire = {path = "../onewire"}
-num-traits = { version = "0.2.12", default-features = false }
-pmbus = { git = "https://github.com/oxidecomputer/pmbus" }
-ringbuf = {path = "../../lib/ringbuf" }
-userlib = {path = "../../sys/userlib"}
-zerocopy = "0.6.1"
+bitfield = { workspace = true }
+num-derive = { workspace = true }
+num-traits = { workspace = true }
+pmbus = { workspace = true }
+smbus-pec = { workspace = true }
+zerocopy = { workspace = true }
+
+derive-idol-err = { path = "../../lib/derive-idol-err" }
+drv-i2c-api = { path = "../i2c-api" }
+drv-onewire = { path = "../onewire" }
+ringbuf = { path = "../../lib/ringbuf" }
+task-power-api = { path = "../../task/power-api" }
+userlib = { path = "../../sys/userlib" }
 
 # This section is here to discourage RLS/rust-analyzer from doing test builds,
 # since test builds don't work for cross compilation.
 [lib]
 test = false
+doctest = false
 bench = false

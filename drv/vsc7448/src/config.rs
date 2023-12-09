@@ -3,17 +3,23 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! High-level configuration abstraction for the VSC7448
+use crate::PORT_COUNT;
+use hubpack::SerializedSize;
 use serde::{Deserialize, Serialize};
 
 /// Port speed
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, SerializedSize, Deserialize,
+)]
 pub enum Speed {
     Speed100M,
     Speed1G,
     Speed10G,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, SerializedSize, Deserialize,
+)]
 pub enum PortMode {
     Sfi,
     BaseKr,
@@ -30,21 +36,25 @@ impl PortMode {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, SerializedSize, Deserialize,
+)]
 pub enum PortDev {
     Dev1g,
     Dev2g5,
     Dev10g,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, SerializedSize, Deserialize,
+)]
 pub enum PortSerdes {
     Serdes1g,
     Serdes6g,
     Serdes10g,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, SerializedSize, Deserialize)]
 pub struct PortConfig {
     pub mode: PortMode,
     pub dev: (PortDev, u8),
@@ -54,10 +64,10 @@ pub struct PortConfig {
 /// The VSC7448 has 52 physical ports.  The port mode uniquely determines the
 /// port device type (1G, 2G5, etc) and device number.
 #[derive(Copy, Clone, Debug)]
-pub struct PortMap([Option<PortMode>; 53]);
+pub struct PortMap([Option<PortMode>; PORT_COUNT]);
 
 impl PortMap {
-    pub const fn new(p: [Option<PortMode>; 53]) -> Self {
+    pub const fn new(p: [Option<PortMode>; PORT_COUNT]) -> Self {
         Self(p)
     }
 

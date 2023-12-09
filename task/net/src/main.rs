@@ -5,40 +5,63 @@
 #![no_std]
 #![no_main]
 
-mod bsp;
+pub mod pins;
+
+mod bsp_support;
 mod buf;
 mod miim_bridge;
 mod server;
 
-pub mod pins;
+// Select the BSP based on the target board
+#[cfg_attr(
+    any(target_board = "nucleo-h743zi2", target_board = "nucleo-h753zi"),
+    path = "bsp/nucleo_h7.rs"
+)]
+#[cfg_attr(target_board = "sidecar-b", path = "bsp/sidecar_bc.rs")]
+#[cfg_attr(target_board = "sidecar-c", path = "bsp/sidecar_bc.rs")]
+#[cfg_attr(
+    any(
+        target_board = "gimlet-b",
+        target_board = "gimlet-c",
+        target_board = "gimlet-d",
+        target_board = "gimlet-e",
+    ),
+    path = "bsp/gimlet_bcde.rs"
+)]
+#[cfg_attr(target_board = "psc-a", path = "bsp/psc_a.rs")]
+#[cfg_attr(
+    any(target_board = "psc-b", target_board = "psc-c"),
+    path = "bsp/psc_bc.rs"
+)]
+#[cfg_attr(target_board = "gimletlet-1", path = "bsp/gimletlet_mgmt.rs")]
+#[cfg_attr(
+    all(target_board = "gimletlet-2", feature = "gimletlet-nic"),
+    path = "bsp/gimletlet_nic.rs"
+)]
+mod bsp;
 
-cfg_if::cfg_if! {
-    if #[cfg(feature = "vlan")] {
-        mod server_vlan;
-        use server_vlan::ServerImpl;
-    } else {
-        mod server_basic;
-        use server_basic::ServerImpl;
-    }
-}
+#[cfg_attr(feature = "vlan", path = "server_vlan.rs")]
+#[cfg_attr(not(feature = "vlan"), path = "server_basic.rs")]
+mod server_impl;
 
-cfg_if::cfg_if! {
-    if #[cfg(feature = "mgmt")] {
-        pub(crate) mod mgmt;
-    }
-}
+#[cfg(feature = "mgmt")]
+pub(crate) mod mgmt;
 
 mod idl {
     use task_net_api::{
         KszError, KszMacTableEntry, LargePayloadBehavior, MacAddress,
-        ManagementCounters, ManagementLinkStatus, MgmtError, PhyError,
-        RecvError, SendError, SocketName, UdpMetadata,
+        MacAddressBlock, ManagementCounters, ManagementLinkStatus, MgmtError,
+        PhyError, RecvError, SendError, SocketName, UdpMetadata,
     };
     include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
 }
 
 use core::sync::atomic::{AtomicU32, Ordering};
-use zerocopy::AsBytes;
+use enum_map::Enum;
+use multitimer::{Multitimer, Repeat};
+use task_jefe_api::Jefe;
+use task_net_api::MacAddressBlock;
+use zerocopy::{AsBytes, U16};
 
 #[cfg(feature = "h743")]
 use stm32h7::stm32h743 as device;
@@ -49,17 +72,29 @@ use drv_stm32h7_eth as eth;
 use drv_stm32xx_sys_api::Sys;
 use userlib::*;
 
+use crate::bsp::BspImpl;
+use crate::bsp_support::Bsp;
+
 task_slot!(SYS, sys);
+task_slot!(JEFE, jefe);
+
+#[cfg(feature = "vpd-mac")]
+task_slot!(PACKRAT, packrat);
 
 /////////////////////////////////////////////////////////////////////////////
 // Configuration things!
 //
 // Much of this needs to move into the board-level configuration.
 
-/// Claims and calculates the MAC address.  This can only be called once.
-fn mac_address() -> &'static [u8; 6] {
-    let buf = crate::buf::claim_mac_address();
-    let uid = drv_stm32xx_uid::read_uid();
+/// Calculates a locally administered, unicast MAC address from the chip ID
+///
+/// This uses a hash of the chip ID and returns a block with starting MAC
+/// address of the form `0e:1d:XX:XX:XX:XX`.  The MAC address block has a stride
+/// of 1 and contains `VLAN_COUNT` MAC addresses (or 1, if we're running without
+/// VLANs enabled).
+fn mac_address_from_uid(sys: &Sys) -> MacAddressBlock {
+    let mut buf = [0u8; 6];
+    let uid = sys.read_uid();
     // Jenkins hash
     let mut hash: u32 = 0;
     for byte in uid.as_bytes() {
@@ -77,24 +112,38 @@ fn mac_address() -> &'static [u8; 6] {
 
     // Set the lower 32-bits based on the hashed UID
     buf[2..].copy_from_slice(&hash.to_be_bytes());
-    buf
+
+    MacAddressBlock {
+        base_mac: buf,
+        #[cfg(feature = "vlan")]
+        count: U16::new(crate::generated::VLAN_COUNT.try_into().unwrap()),
+
+        #[cfg(not(feature = "vlan"))]
+        count: U16::new(1),
+        stride: 1,
+    }
 }
+
+#[cfg(feature = "vpd-mac")]
+fn mac_address_from_vpd() -> Option<MacAddressBlock> {
+    // The first nontrivial thing `main()` does is call `BspImpl::preinit()`,
+    // which waits for the sequencer task on all our major boards to progress to
+    // an appropriate point, which includes having read board VPD and loaded it
+    // into packrat, so we don't need to wait here.
+    use task_packrat_api::Packrat;
+    let packrat = Packrat::from(PACKRAT.get_task_id());
+    packrat.get_mac_address_block().ok()
+}
+
+////////////////////////////////////////////////////////////////////////////////
 
 const TX_RING_SZ: usize = 4;
 
 const RX_RING_SZ: usize = 4;
 
-/// Notification mask for our IRQ; must match configuration in app.toml.
-const ETH_IRQ: u32 = 1 << 0;
-
-/// Notification mask for MDIO timer; must match configuration in app.toml.
-const MDIO_TIMER_IRQ: u32 = 1 << 1;
-
-/// Notification mask for optional periodic logging
-const WAKE_IRQ: u32 = 1 << 2;
-
-/// Number of entries to maintain in our neighbor cache (ARP/NDP).
-const NEIGHBORS: usize = 4;
+/// How long to wait with no received packets before we decide the driver is
+/// b0rked and restart it.
+const RX_WATCHDOG_INTERVAL: u64 = 60_000;
 
 /////////////////////////////////////////////////////////////////////////////
 // Main driver loop.
@@ -107,11 +156,12 @@ static ITER_COUNT: AtomicU32 = AtomicU32::new(0);
 fn main() -> ! {
     let sys = SYS.get_task_id();
     let sys = Sys::from(sys);
+    let jefe = Jefe::from(JEFE.get_task_id());
 
     // Do any preinit tasks specific to this board.  For hardware which requires
     // explicit clock configuration, this is where the `net` tasks waits for
     // the clock to come up.
-    bsp::preinit();
+    BspImpl::preinit();
 
     // Turn on the Ethernet power.
     sys.enable_clock(drv_stm32xx_sys_api::Peripheral::Eth1Rx);
@@ -129,7 +179,7 @@ fn main() -> ! {
     sys.leave_reset(drv_stm32xx_sys_api::Peripheral::Tim16);
 
     // Do preliminary pin configuration
-    bsp::configure_ethernet_pins(&sys);
+    BspImpl::configure_ethernet_pins(&sys);
 
     // Set up our ring buffers.
     let (tx_storage, tx_buffers) = buf::claim_tx_statics();
@@ -145,55 +195,98 @@ fn main() -> ! {
         tx_ring,
         rx_ring,
         unsafe { &*device::TIM16::ptr() },
-        MDIO_TIMER_IRQ,
+        notifications::MDIO_TIMER_IRQ_MASK,
     );
 
     // Set up the network stack.
-    use smoltcp::wire::EthernetAddress;
-    let mac = EthernetAddress::from_bytes(mac_address());
+    #[cfg(feature = "vpd-mac")]
+    let mac_address =
+        mac_address_from_vpd().unwrap_or_else(|| mac_address_from_uid(&sys));
 
-    // Configure the server and its local storage arrays (on the stack)
-    let ipv6_addr = link_local_iface_addr(mac);
+    #[cfg(not(feature = "vpd-mac"))]
+    let mac_address = mac_address_from_uid(&sys);
 
     // Board-dependant initialization (e.g. bringing up the PHYs)
-    let bsp = bsp::Bsp::new(&eth, &sys);
+    let bsp = BspImpl::new(&eth, &sys);
 
-    let mut server = ServerImpl::new(&eth, ipv6_addr, mac, bsp);
+    let mut server = server_impl::new(&eth, mac_address, bsp);
 
     // Turn on our IRQ.
-    userlib::sys_irq_control(ETH_IRQ, true);
+    userlib::sys_irq_control(notifications::ETH_IRQ_MASK, true);
 
-    // Some of the BSPs include a 'wake' function which allows for periodic
-    // logging.  We schedule a wake-up before entering the idol_runtime dispatch
-    // loop, to make sure that this gets called periodically.
-    let mut wake_target_time = sys_get_timer().now;
+    // We use two timers:
+    #[derive(Copy, Clone, Enum)]
+    enum Timers {
+        Wake,
+        Watchdog,
+    }
+    let mut multitimer =
+        Multitimer::<Timers>::new(notifications::WAKE_TIMER_BIT);
+
+    let now = sys_get_timer().now;
+    if let Some(wake_interval) = BspImpl::WAKE_INTERVAL {
+        // Some of the BSPs include a 'wake' function which allows for periodic
+        // logging.  We schedule a wake-up before entering the idol_runtime
+        // dispatch loop, to make sure that this gets called periodically.
+        multitimer.set_timer(
+            Timers::Wake,
+            now,
+            Some(Repeat::AfterWake(wake_interval)),
+        );
+    }
+
+    // Start the watchdog timer running.
+    multitimer.set_timer(Timers::Watchdog, now + RX_WATCHDOG_INTERVAL, None);
 
     // Go!
     loop {
         ITER_COUNT.fetch_add(1, Ordering::Relaxed);
 
         // Call into smoltcp.
-        let poll_result = server.poll(userlib::sys_get_timer().now);
-        let any_activity = poll_result.unwrap_or(true);
+        let now = sys_get_timer().now;
+        let activity = server.poll(now);
 
-        if any_activity {
+        if activity.mac_rx {
+            // Whenever we observe activity we bump the timer forward. Because
+            // we're going to poll the timer below (after doing this) and we
+            // always poll and immediately consume iter_fired, this will prevent
+            // the timer from firing this iteration.
+            multitimer.set_timer(
+                Timers::Watchdog,
+                now + RX_WATCHDOG_INTERVAL,
+                None,
+            );
+        }
+
+        if activity.ip {
             // Ask the server to iterate over sockets looking for work
             server.wake_sockets();
         } else {
-            // No work to do immediately. Wait for an ethernet IRQ or an
-            // incoming message, or for a certain amount of time to pass.
-            if let Some(wake_interval) = bsp::WAKE_INTERVAL {
-                let now = sys_get_timer().now;
-                if now >= wake_target_time {
-                    server.wake();
-                    wake_target_time = now + wake_interval;
+            multitimer.poll_now();
+            for t in multitimer.iter_fired() {
+                match t {
+                    Timers::Wake => {
+                        server.wake();
+                        // timer is set to auto-repeat
+                    }
+                    Timers::Watchdog => {
+                        jefe.restart_me();
+                    }
                 }
-                sys_set_timer(Some(wake_target_time), WAKE_IRQ);
             }
-            let mut msgbuf = [0u8; ServerImpl::INCOMING_SIZE];
+            let mut msgbuf = [0u8; idl::INCOMING_SIZE];
             idol_runtime::dispatch_n(&mut msgbuf, &mut server);
         }
     }
+}
+
+/// Struct used to describe any activity during `poll`.
+pub(crate) struct Activity {
+    /// Did the IP stack do anything? (i.e. do we need to process socket events)
+    ip: bool,
+    /// Did the MAC have anything available to receive? (i.e. is it still
+    /// working)
+    mac_rx: bool,
 }
 
 /// We can map an Ethernet MAC address into the IPv6 space as follows.
@@ -229,7 +322,22 @@ fn link_local_iface_addr(
     smoltcp::wire::Ipv6Address(bytes)
 }
 
+fn ethernet_capabilities(
+    eth: &drv_stm32h7_eth::Ethernet,
+) -> smoltcp::phy::DeviceCapabilities {
+    let mut caps = smoltcp::phy::DeviceCapabilities::default();
+    caps.max_transmission_unit = 1514;
+    caps.max_burst_size = Some(1514 * eth.max_tx_burst_len());
+
+    // We do not rely on _any_ of the IP checksum features, so we can leave
+    // caps.checksum at default.
+
+    caps
+}
+
 // Place to namespace all the bits generated by our config processor.
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/net_config.rs"));
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

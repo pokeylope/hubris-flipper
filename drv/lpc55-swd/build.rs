@@ -17,9 +17,9 @@ struct TaskConfig {
 }
 
 fn generate_swd_functions(config: &TaskConfig) -> Result<()> {
-    let out_dir = std::env::var("OUT_DIR")?;
-    let dest_path = std::path::Path::new(&out_dir).join("swd.rs");
-    let mut file = std::fs::File::create(&dest_path)?;
+    let out_dir = build_util::out_dir();
+    let dest_path = out_dir.join("swd.rs");
+    let mut file = std::fs::File::create(dest_path)?;
 
     let out_cfg = &config.out_cfg;
     let in_cfg = &config.in_cfg;
@@ -53,7 +53,7 @@ fn generate_swd_functions(config: &TaskConfig) -> Result<()> {
                 use drv_lpc55_gpio_api::*;
 
                 let (pin, conf) = drv_lpc55_gpio_api::Pins::iocon_conf_val(#out_cfg);
-                let base = iocon_base + 4 * (pin as u32);
+                let base = iocon_base + 4 * pin;
                 unsafe {
                     core::ptr::write_volatile(base as *mut u32, conf);
                 }
@@ -67,7 +67,7 @@ fn generate_swd_functions(config: &TaskConfig) -> Result<()> {
             {
                 use drv_lpc55_gpio_api::*;
                 let (pin, conf) = drv_lpc55_gpio_api::Pins::iocon_conf_val(#in_cfg);
-                let base = iocon_base + 4 * (pin as u32);
+                let base = iocon_base + 4 * pin;
                 unsafe {
                     core::ptr::write_volatile(base as *mut u32, conf);
                 }
@@ -75,8 +75,8 @@ fn generate_swd_functions(config: &TaskConfig) -> Result<()> {
         }
         fn setup_spi(task : TaskId) -> spi_core::Spi {
             let syscon = Syscon::from(task);
-                syscon.enable_clock(Peripheral::#spi_periph).unwrap_lite();
-            syscon.leave_reset(Peripheral::#spi_periph).unwrap_lite();
+            syscon.enable_clock(Peripheral::#spi_periph);
+            syscon.leave_reset(Peripheral::#spi_periph);
             let flexcomm = unsafe { &*device::#flexcomm::ptr() };
             flexcomm.pselid.write(|w| w.persel().spi());
             let registers = unsafe { &*device::#spi_regs::ptr() };
@@ -88,12 +88,14 @@ fn generate_swd_functions(config: &TaskConfig) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     idol::server::build_server_support(
         "../../idl/sp-ctrl.idol",
         "server_stub.rs",
         idol::server::ServerStyle::InOrder,
     )?;
+
+    build_util::expose_target_board();
 
     let task_config = build_util::task_config::<TaskConfig>()?;
 

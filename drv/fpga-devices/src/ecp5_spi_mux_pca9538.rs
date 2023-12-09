@@ -7,26 +7,18 @@ use crate::FpgaUserDesign;
 use drv_fpga_api::FpgaError;
 use drv_i2c_api::ResponseCode;
 use drv_i2c_devices::pca9538;
-use drv_spi_api::{self as spi_api, SpiDevice, SpiError};
-use drv_stm32xx_sys_api::{self as sys_api, GpioError, Sys};
+use drv_spi_api::{self as spi_api, SpiDevice, SpiError, SpiServer};
+use drv_stm32xx_sys_api::{self as sys_api, Sys};
 
 /// This module implements an ECP5 driver which exposes two physical devices,
 /// which share a single SPI bus using a mux and are controlled through a shared
 /// PCA9538 GPIO expander.
 
-/// Impl Error type, with conversion from `GpioError`, `SpiError` and
-/// `ResponseCode`.
+/// Impl Error type, with conversion from `SpiError` and `ResponseCode`.
 #[derive(Copy, Clone, Debug)]
 pub enum Error {
-    GpioError(GpioError),
     SpiError(SpiError),
     I2cError(ResponseCode),
-}
-
-impl From<GpioError> for Error {
-    fn from(e: GpioError) -> Self {
-        Self::GpioError(e)
-    }
 }
 
 impl From<SpiError> for Error {
@@ -44,15 +36,11 @@ impl From<ResponseCode> for Error {
 impl From<Error> for u8 {
     fn from(e: Error) -> Self {
         match e {
-            Error::GpioError(e) => match e {
-                GpioError::BadArg => 2,
-            },
             Error::SpiError(e) => match e {
                 SpiError::BadTransferSize => 3,
-                SpiError::ServerRestarted => 4,
+                SpiError::TaskRestarted => 4,
                 SpiError::NothingToRelease => 5,
                 SpiError::BadDevice => 6,
-                SpiError::DataOverrun => 7,
             },
             Error::I2cError(e) => 8 + (e as u8),
         }
@@ -65,10 +53,10 @@ impl From<Error> for FpgaError {
     }
 }
 
-pub struct DriverConfig {
+pub struct DriverConfig<S: SpiServer> {
     pub sys: Sys,
-    pub configuration_port: SpiDevice,
-    pub user_design: SpiDevice,
+    pub configuration_port: SpiDevice<S>,
+    pub user_design: SpiDevice<S>,
     pub spi_mux_select: sys_api::PinSet,
     pub gpio: pca9538::Pca9538,
     pub user_design_reset_duration: u64,
@@ -81,19 +69,19 @@ pub struct DevicePins {
     pub user_design_reset_n: pca9538::PinSet,
 }
 
-pub struct DeviceInstance<'a> {
-    pub driver: &'a Driver,
+pub struct DeviceInstance<'a, S: SpiServer> {
+    pub driver: &'a Driver<S>,
     pub device_id: usize,
     pub pins: DevicePins,
 }
 
-pub struct Driver {
-    config: DriverConfig,
+pub struct Driver<S: SpiServer> {
+    config: DriverConfig<S>,
     device_selected: core::cell::Cell<Option<usize>>,
 }
 
-impl Driver {
-    pub fn new(config: DriverConfig) -> Self {
+impl<S: SpiServer> Driver<S> {
+    pub fn new(config: DriverConfig<S>) -> Self {
         Self {
             config,
             device_selected: core::cell::Cell::new(None),
@@ -103,16 +91,13 @@ impl Driver {
     pub fn init(&self) -> Result<(), Error> {
         use sys_api::*;
 
-        self.config.sys.gpio_set(self.config.spi_mux_select)?;
-        self.config
-            .sys
-            .gpio_configure_output(
-                self.config.spi_mux_select,
-                OutputType::PushPull,
-                Speed::Low,
-                Pull::None,
-            )
-            .map_err(Error::from)?;
+        self.config.sys.gpio_set(self.config.spi_mux_select);
+        self.config.sys.gpio_configure_output(
+            self.config.spi_mux_select,
+            OutputType::PushPull,
+            Speed::Low,
+            Pull::None,
+        );
         self.device_selected.set(Some(0));
         Ok(())
     }
@@ -121,7 +106,7 @@ impl Driver {
         &self,
         device_id: usize,
         pins: DevicePins,
-    ) -> Result<DeviceInstance<'_>, Error> {
+    ) -> Result<DeviceInstance<'_, S>, Error> {
         let output_pins =
             pins.init_n | pins.program_n | pins.user_design_reset_n;
 
@@ -148,39 +133,31 @@ impl Driver {
         &self,
         device0_pins: DevicePins,
         device1_pins: DevicePins,
-    ) -> Result<[Ecp5<DeviceInstance<'_>>; 2], Error> {
+    ) -> Result<[Ecp5<DeviceInstance<'_, S>>; 2], Error> {
         Ok([
             Ecp5::new(self.init_device(0, device0_pins)?),
             Ecp5::new(self.init_device(1, device1_pins)?),
         ])
     }
 
-    pub fn select_device(&self, device_id: usize) -> Result<(), GpioError> {
-        let set_gpio = || match self
-            .config
-            .sys
-            .gpio_set_to(self.config.spi_mux_select, device_id == 0)
-        {
-            Err(e) => {
-                self.device_selected.set(None);
-                Err(e)
-            }
-            Ok(()) => {
-                self.device_selected.set(Some(device_id));
-                userlib::hl::sleep_for(1);
-                Ok(())
-            }
+    pub fn select_device(&self, device_id: usize) {
+        let set_gpio = || {
+            self.config
+                .sys
+                .gpio_set_to(self.config.spi_mux_select, device_id == 0);
+            self.device_selected.set(Some(device_id));
+            userlib::hl::sleep_for(1);
         };
 
         match self.device_selected.get() {
             None => set_gpio(),
             Some(selected_id) if selected_id != device_id => set_gpio(),
-            _ => Ok(()),
+            _ => (),
         }
     }
 }
 
-impl<'a> Ecp5Driver for DeviceInstance<'a> {
+impl<'a, S: SpiServer> Ecp5Driver for DeviceInstance<'a, S> {
     type Error = Error;
 
     fn program_n(&self) -> Result<bool, Self::Error> {
@@ -241,9 +218,7 @@ impl<'a> Ecp5Driver for DeviceInstance<'a> {
     }
 
     fn configuration_read(&self, data: &mut [u8]) -> Result<(), Self::Error> {
-        self.driver
-            .select_device(self.device_id)
-            .map_err(Self::Error::from)?;
+        self.driver.select_device(self.device_id);
         self.driver
             .config
             .configuration_port
@@ -252,9 +227,7 @@ impl<'a> Ecp5Driver for DeviceInstance<'a> {
     }
 
     fn configuration_write(&self, data: &[u8]) -> Result<(), Self::Error> {
-        self.driver
-            .select_device(self.device_id)
-            .map_err(Self::Error::from)?;
+        self.driver.select_device(self.device_id);
         self.driver
             .config
             .configuration_port
@@ -267,9 +240,7 @@ impl<'a> Ecp5Driver for DeviceInstance<'a> {
         c: Command,
     ) -> Result<(), Self::Error> {
         let buffer: [u8; 4] = [c as u8, 0, 0, 0];
-        self.driver
-            .select_device(self.device_id)
-            .map_err(Self::Error::from)?;
+        self.driver.select_device(self.device_id);
         self.driver
             .config
             .configuration_port
@@ -278,9 +249,7 @@ impl<'a> Ecp5Driver for DeviceInstance<'a> {
     }
 
     fn configuration_lock(&self) -> Result<(), Self::Error> {
-        self.driver
-            .select_device(self.device_id)
-            .map_err(Self::Error::from)?;
+        self.driver.select_device(self.device_id);
         self.driver
             .config
             .configuration_port
@@ -297,7 +266,7 @@ impl<'a> Ecp5Driver for DeviceInstance<'a> {
     }
 }
 
-impl<'a> FpgaUserDesign for DeviceInstance<'a> {
+impl<'a, S: SpiServer> FpgaUserDesign for DeviceInstance<'a, S> {
     fn user_design_enabled(&self) -> Result<bool, FpgaError> {
         Ok(self.user_design_reset_n()?)
     }
@@ -324,9 +293,7 @@ impl<'a> FpgaUserDesign for DeviceInstance<'a> {
     }
 
     fn user_design_read(&self, data: &mut [u8]) -> Result<(), FpgaError> {
-        self.driver
-            .select_device(self.device_id)
-            .map_err(Error::from)?;
+        self.driver.select_device(self.device_id);
         self.driver
             .config
             .user_design
@@ -335,9 +302,7 @@ impl<'a> FpgaUserDesign for DeviceInstance<'a> {
     }
 
     fn user_design_write(&self, data: &[u8]) -> Result<(), FpgaError> {
-        self.driver
-            .select_device(self.device_id)
-            .map_err(Error::from)?;
+        self.driver.select_device(self.device_id);
         self.driver
             .config
             .user_design
@@ -346,9 +311,7 @@ impl<'a> FpgaUserDesign for DeviceInstance<'a> {
     }
 
     fn user_design_lock(&self) -> Result<(), FpgaError> {
-        self.driver
-            .select_device(self.device_id)
-            .map_err(Error::from)?;
+        self.driver.select_device(self.device_id);
         self.driver
             .config
             .user_design

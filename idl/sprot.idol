@@ -1,0 +1,261 @@
+// SP to RoT communications over SPI
+
+Interface(
+    name: "SpRot",
+    ops: {
+        "status": (
+            doc: "Return status about the sprot protocol",
+            reply : Result(
+              ok: "SprotStatus",
+              err: Complex("SprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "io_stats": (
+            doc: "Return IO stats for Sprot",
+            reply: Result(
+                ok: "SprotIoStats",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack, 
+            idempotent: true,
+        ),
+        "rot_state": (
+            doc: "Return boot-time info about the RoT (deprecated)",
+            reply: Result(
+                ok: "RotState",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "pulse_cs": (
+            doc: "SPI Chip Select assert, delay, deassert",
+            args: {
+                "delay": "u16",
+            },
+            reply: Result(
+                ok: "PulseStatus",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack, 
+        ),
+
+        // The RoT update API is copy and pasted from idl/update.idol.
+        "block_size": (
+            doc: "Get the block size for the update API. This is the length expected for the `write_one_block` call",
+            args: { },
+            reply: Result(
+                ok: "u32",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack, 
+            idempotent: true,
+        ),
+        "prep_image_update": (
+            doc: "Do any necessary preparation for writing the image. This may include erasing flash and unlocking registers",
+            args: {
+                "target": "UpdateTarget",
+            },
+            reply : Result(
+                ok: "()",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack, 
+            idempotent: true,
+        ),
+        "write_one_block": (
+            doc: "Write a single block of an update image to the designated location.",
+            args: { 
+                "block_num" : "u32",
+            },
+            leases : {
+                "block": (type: "[u8]", read: true, max_len: Some(512)),
+            },
+            reply: Result (
+                ok: "()",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack, 
+        ),
+        "abort_update": (
+            doc: "Cancel the current update in progress. Must call prep_image_update again before restarting.",
+            args : { },
+            reply : Result(
+                ok: "()",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack,
+        ),
+        "finish_image_update": (
+            doc: "Do any necessary work post image write",
+            args : { },
+            reply : Result(
+                ok: "()",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack,
+        ),
+        "switch_default_image": (
+            doc: "Prefer a specific image slot for one or many boots",
+            args: {
+                "slot": "SlotId",
+                "duration": "SwitchDuration",
+            },
+            reply : Result(
+                ok: "()",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "reset": (
+            doc: "Reset",
+            reply : Result(
+                ok: "()",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "dump": (
+            doc: "Trigger a dump",
+            args: {
+                "address": "u32",
+            },
+            reply : Result(
+                ok: "()",
+                err: Complex("DumpOrSprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "caboose_size": (
+            doc: "Returns the size of the caboose",
+            args: {
+                "slot": "SlotId",
+            },
+            reply: Result(
+                ok: "u32",
+                err: Complex("RawCabooseOrSprotError"),
+            ),
+            idempotent: true,
+            encoding: Hubpack,
+        ),
+        "read_caboose_region": (
+            doc: "Reads a subset of the caboose memory",
+            args: {
+                "offset": "u32",
+                "slot": "SlotId",
+            },
+            reply: Result(
+                ok: "()",
+                err: Complex("RawCabooseOrSprotError"),
+            ),
+            leases : {
+                "out": (type: "[u8]", write: true),
+            },
+            idempotent: true,
+            encoding: Hubpack,
+        ),
+        "rot_boot_info": (
+            doc: "Return boot info about the RoT",
+            reply: Result(
+                ok: "RotBootInfo",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "cert_chain_len": (
+            doc: "Return the length of the alias cert chain",
+            reply: Result(
+                ok: "u32",
+                err: Complex("AttestOrSprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "cert_len": (
+            doc: "Get length of a cert in the cert chain",
+            args: {
+                "index" : "u32",
+            },
+            reply: Result(
+                ok: "u32",
+                err: Complex("AttestOrSprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "cert": (
+            doc: "Get a cert from the alias cert chaing",
+            args: {
+				"index" : "u32",
+                "offset" : "u32",
+            },
+            leases: {
+                "dest": (type: "[u8]", write: true),
+            },
+            reply: Result(
+                ok: "()",
+                err: Complex("AttestOrSprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "record": (
+            doc: "Record a measurement",
+            args: {
+                "algorithm": "HashAlgorithm",
+            },
+            leases: {
+                "data": (type: "[u8]", read: true, max_len: Some(512)),
+            },
+            reply: Result(
+                ok: "()",
+                err: Complex("AttestOrSprotError"),
+            ),
+            encoding: Hubpack,
+        ),
+        "read_rot_page": (
+            doc: "Read a CMPA/CFPA page from the RoT",
+            args: {
+                "page": "RotPage",
+            },
+            leases: {
+                "dest": (type: "[u8]", write: true),
+            },
+            reply: Result(
+                ok: "()",
+                err: Complex("SprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+        "log": (
+            doc: "Get the measurement log",
+            args: {
+                "offset" : "u32",
+            },
+            leases: {
+                "dest": (type: "[u8]", write: true),
+            },
+            reply: Result(
+                ok: "()",
+                err: Complex("AttestOrSprotError"),
+            ),
+            encoding: Hubpack,
+        ),
+        "log_len": (
+            doc: "Get length of the serialized measurement log",
+            reply: Result(
+                ok: "u32",
+                err: Complex("AttestOrSprotError"),
+            ),
+            encoding: Hubpack,
+            idempotent: true,
+        ),
+    }
+)

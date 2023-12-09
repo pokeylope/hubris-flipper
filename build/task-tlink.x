@@ -17,9 +17,6 @@ SECTIONS
     __etext = .;
   } > FLASH =0xdededede
 
-
-  INCLUDE trustzone.x
-
   /* ### .rodata */
   .rodata : ALIGN(4)
   {
@@ -67,20 +64,20 @@ SECTIONS
     __sheap = .;
   } > RAM
 
-  /* ## .got */
-  /* Dynamic relocations are unsupported. This section is only used to detect relocatable code in
-     the input files and raise an error if relocatable code is found */
-  .got (NOLOAD) :
-  {
-    KEEP(*(.got .got.*));
-  }
-
   /* ## .task_slot_table */
   /* Table of TaskSlot instances and their names. Used to resolve task
      dependencies during packaging. */
   .task_slot_table (INFO) : {
     . = .;
     KEEP(*(.task_slot_table));
+  }
+
+  /* ## .caboose_pos_table */
+  /* Table of CaboosePos instances and their names. Used to record caboose
+     position during packaging. */
+  .caboose_pos_table (INFO) : {
+    . = .;
+    KEEP(*(.caboose_pos_table));
   }
 
   /* ## .idolatry */
@@ -96,5 +93,6 @@ SECTIONS
     *(.ARM.exidx);
     *(.ARM.exidx.*);
     *(.ARM.extab.*);
+    *(.got .got.*);
   }
 }

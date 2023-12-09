@@ -1,0 +1,45 @@
+[package]
+name = "lpc55-rot-startup"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+dice-mfg = ["lib-dice", "lpc55-puf", "salty", "static_assertions",  "lib-lpc55-usart"]
+dice-self = ["lib-dice", "lpc55-puf", "salty"]
+locked = []
+
+[dependencies]
+cfg-if = { workspace = true }
+cortex-m = { workspace = true }
+cortex-m-rt = { workspace = true }
+digest = { workspace = true, optional = false}
+hubpack = { workspace = true, optional = false}
+lpc55-pac = { workspace = true, features = ["rt"] }
+nb = { workspace = true }
+salty = { workspace = true, optional = true }
+serde = { workspace = true, optional = false }
+sha3 = { workspace = true, optional = false }
+static_assertions = { workspace = true, optional = true }
+zerocopy = { workspace = true }
+zeroize = { workspace = true }
+
+abi = { path = "../../sys/abi" }
+armv8-m-mpu = { path = "../armv8-m-mpu" }
+lpc55-puf = { path = "../lpc55-puf", optional = true }
+lib-dice = { path = "../dice", optional = true }
+lib-lpc55-usart = { path = "../lpc55-usart", optional = true }
+lpc55_romapi = { path = "../lpc55-romapi" }
+stage0-handoff = { path = "../stage0-handoff"}
+unwrap-lite = { path = "../unwrap-lite" }
+drv-lpc55-flash.path = "../../drv/lpc55-flash"
+
+[build-dependencies]
+build-util = { path = "../../build/util" }
+ron = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[lib]
+test = false
+doctest = false
+bench = false

@@ -1,0 +1,4 @@
+name = "psc-b"
+board = "psc-b"
+
+inherit = "base.toml"

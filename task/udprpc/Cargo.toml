@@ -4,9 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-userlib = {path = "../../sys/userlib", features = ["panic-messages"]}
-task-net-api = {path = "../net-api"}
-zerocopy = "0.6.1"
+zerocopy = { workspace = true }
+
+task-net-api = { path = "../net-api" }
+userlib = { path = "../../sys/userlib", features = ["panic-messages"] }
+
+[build-dependencies]
+build-util = { path = "../../build/util" }
 
 [features]
 vlan = ["task-net-api/vlan"]
@@ -16,4 +20,5 @@ vlan = ["task-net-api/vlan"]
 [[bin]]
 name = "task-udprpc"
 test = false
+doctest = false
 bench = false

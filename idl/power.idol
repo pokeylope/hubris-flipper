@@ -1,0 +1,251 @@
+// Power API
+
+Interface(
+    name: "Power",
+    ops: {
+        "pmbus_read": (
+            doc: "performs a pmbus read operation",
+            encoding: Hubpack,
+            args: {
+                "dev": "Device",
+                "rail": "u8",
+                "index": "u32",
+                "op": "Operation",
+            },
+            reply: Result(
+                ok: "PmbusValue",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "read_mode": (
+            doc: "reads the VOUT_MODE value for the given device",
+            encoding: Hubpack,
+            args: {
+                "dev": "Device",
+                "rail": "u8",
+                "index": "u32",
+            },
+            reply: Result(
+                ok: "u8",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "phase_current": (
+            doc: "reads phase current for the rail denoted by the specified voltage sensor",
+            args: {
+                "rail": (
+                    type: "SensorId",
+                    recv: From("u32", None),
+                ),
+                "phase": "u8",
+            },
+            reply: Result(
+                ok: "f32",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ), 
+        "bmr491_event_log_read": (
+            doc: "reads an event from the BMR491's combined fault and lifecycle event log",
+            args: {
+                "index": "u8",
+            },
+            reply: Result(
+                ok: "Bmr491Event",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "bmr491_max_fault_event_index": (
+            doc: "returns the index of the most recent fault event in the BMR491's event log",
+            reply: Result(
+                ok: "u8",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "bmr491_max_lifecycle_event_index": (
+            doc: "returns the index of the most recent lifecycle event in the BMR491's event log",
+            reply: Result(
+                ok: "u8",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "rendmp_blackbox_dump": (
+            doc: "reads the RAM blackbox of a Renesas multiphase power controller",
+            args: {
+                "addr": "u8",
+            },
+            reply: Result(
+                ok: "RenesasBlackbox",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+            encoding: Hubpack,
+        ),
+        "rendmp_dma_read": (
+            doc: "reads a DMA register from a Renesas multiphase power controller",
+            args: {
+                "addr": "u8",
+                "reg": "u16",
+            },
+            reply: Result(
+                ok: "u32",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "rendmp_dma_write": (
+            doc: "reads a DMA register from a Renesas multiphase power controller",
+            args: {
+                "addr": "u8",
+                "reg": "u16",
+                "data": "u32",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+
+        // Low-level read/write APIs
+        //
+        // In all of these APIs, `index` is the index of the rail within
+        // CONTROLLER_CONFIG.  This must be determined by parsing the ELF data,
+        // as it's not necessarily the same as the order in the app.toml
+        "raw_pmbus_read_byte": (
+            doc: "performs a raw pmbus read operation",
+            encoding: Hubpack,
+            args: {
+                "index": "u32",
+                "has_rail": "bool",
+                "op": "u8",
+            },
+            reply: Result(
+                ok: "u8",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "raw_pmbus_read_word": (
+            doc: "performs a raw pmbus read operation",
+            encoding: Hubpack,
+            args: {
+                "index": "u32",
+                "has_rail": "bool",
+                "op": "u8",
+            },
+            reply: Result(
+                ok: "u16",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "raw_pmbus_read_word32": (
+            doc: "performs a raw pmbus read operation",
+            encoding: Hubpack,
+            args: {
+                "index": "u32",
+                "has_rail": "bool",
+                "op": "u8",
+            },
+            reply: Result(
+                ok: "u32",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "raw_pmbus_read_block": (
+            doc: "performs a raw pmbus read operation",
+            encoding: Hubpack,
+            args: {
+                "index": "u32",
+                "has_rail": "bool",
+                "op": "u8",
+            },
+            reply: Result(
+                ok: "RawPmbusBlock",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "raw_pmbus_set": (
+            doc: "performs a raw pmbus write operation",
+            encoding: Hubpack,
+            args: {
+                "index": "u32",
+                "has_rail": "bool",
+                "op": "u8",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "raw_pmbus_write_byte": (
+            doc: "performs a raw pmbus write operation",
+            encoding: Hubpack,
+            args: {
+                "index": "u32",
+                "has_rail": "bool",
+                "op": "u8",
+                "data": "u8",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "raw_pmbus_write_word": (
+            doc: "performs a raw pmbus write operation",
+            encoding: Hubpack,
+            args: {
+                "index": "u32",
+                "has_rail": "bool",
+                "op": "u8",
+                "data": "u16",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "raw_pmbus_write_word32": (
+            doc: "performs a raw pmbus write operation",
+            encoding: Hubpack,
+            args: {
+                "index": "u32",
+                "has_rail": "bool",
+                "op": "u8",
+                "data": "u32",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+        "raw_pmbus_write_block": (
+            doc: "performs a raw pmbus write operation",
+            encoding: Hubpack,
+            args: {
+                "index": "u32",
+                "has_rail": "bool",
+                "op": "u8",
+                "data": "RawPmbusBlock",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("ResponseCode"),
+            ),
+            idempotent: true,
+        ),
+    },
+)

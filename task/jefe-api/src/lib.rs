@@ -6,6 +6,8 @@
 
 #![no_std]
 
+use derive_idol_err::IdolError;
+pub use dump_agent_api::DumpAgentError;
 use serde::{Deserialize, Serialize};
 use userlib::*;
 
@@ -23,6 +25,22 @@ pub enum ResetReason {
     ExitStandby,
     Other(u32),
     Unknown, // TODO remove and use `Option<ResetReason>` once we switch to hubpack
+}
+
+#[derive(Copy, Clone, Debug, FromPrimitive, Eq, PartialEq, IdolError)]
+#[repr(C)]
+pub enum DumpAreaError {
+    InvalidIndex = 1,
+    AlreadyInUse,
+}
+
+impl Jefe {
+    /// Asks the supervisor to restart the current task without recording a
+    /// fault.
+    pub fn restart_me(&self) -> ! {
+        self.restart_me_raw();
+        unreachable!()
+    }
 }
 
 include!(concat!(env!("OUT_DIR"), "/client_stub.rs"));

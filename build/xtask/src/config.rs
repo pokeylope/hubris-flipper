@@ -2,14 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::{hash_map::DefaultHasher, BTreeMap};
+use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet};
 use std::hash::Hasher;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use indexmap::IndexMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::auxflash::{build_auxflash, AuxFlash, AuxFlashData};
 
@@ -23,24 +23,27 @@ struct RawConfig {
     target: String,
     board: String,
     chip: String,
+    #[serde(default)]
+    epoch: u32,
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    fwid: bool,
     memory: Option<String>,
     #[serde(default)]
     image_names: Vec<String>,
     #[serde(default)]
     external_images: Vec<String>,
     #[serde(default)]
-    signing: Option<Signing>,
-    secure_separation: Option<bool>,
+    signing: Option<RoTMfgSettings>,
     stacksize: Option<u32>,
     kernel: Kernel,
     tasks: IndexMap<String, Task>,
     #[serde(default)]
     extratext: IndexMap<String, Peripheral>,
-    #[serde(default)]
     config: Option<ordered_toml::Value>,
-    #[serde(default)]
-    secure_task: Option<String>,
     auxflash: Option<AuxFlash>,
+    caboose: Option<CabooseConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -49,10 +52,12 @@ pub struct Config {
     pub target: String,
     pub board: String,
     pub chip: String,
+    pub epoch: u32,
+    pub version: u32,
+    pub fwid: bool,
     pub image_names: Vec<String>,
     pub external_images: Vec<String>,
-    pub signing: Option<Signing>,
-    pub secure_separation: Option<bool>,
+    pub signing: Option<RoTMfgSettings>,
     pub stacksize: Option<u32>,
     pub kernel: Kernel,
     pub outputs: IndexMap<String, Vec<Output>>,
@@ -62,20 +67,62 @@ pub struct Config {
     pub config: Option<ordered_toml::Value>,
     pub buildhash: u64,
     pub app_toml_path: PathBuf,
-    pub secure_task: Option<String>,
+    /// Fully expanded manifest file, with all patches applied
+    pub app_config: String,
     pub auxflash: Option<AuxFlashData>,
+    pub caboose: Option<CabooseConfig>,
+}
+
+impl Config {
+    pub fn archive_name(&self, image_name: &str) -> String {
+        assert!(
+            self.image_names.iter().any(|s| s == image_name),
+            "cannot build archive name for image {image_name:?}: expected one of {:?}",
+            self.image_names,
+        );
+        format!("build-{}-image-{}.zip", self.name, image_name)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CabooseConfig {
+    /// List of tasks that are allowed to access the caboose
+    #[serde(default)]
+    pub tasks: Vec<String>,
+
+    /// Name of the memory region in which the caboose is placed
+    ///
+    /// (this is almost certainly "flash")
+    pub region: String,
+
+    /// Size of the caboose
+    ///
+    /// The system reserves two words (8 bytes) for the size and marker, so the
+    /// user-accessible space is 8 bytes less than this value.
+    pub size: u32,
+
+    /// If `true`, populates the caboose with default values using `hubtools`
+    #[serde(default)]
+    pub default: bool,
 }
 
 impl Config {
     pub fn from_file(cfg: &Path) -> Result<Self> {
-        let cfg_contents = std::fs::read(&cfg)?;
-        let toml: RawConfig = toml::from_slice(&cfg_contents)?;
+        Self::from_file_with_hasher(cfg, DefaultHasher::new())
+    }
+
+    fn from_file_with_hasher(
+        cfg: &Path,
+        mut hasher: DefaultHasher,
+    ) -> Result<Self> {
+        let doc =
+            read_and_flatten_toml(cfg, &mut hasher, &mut BTreeSet::new())?;
+        let cfg_contents = doc.to_string();
+
+        let toml: RawConfig = toml::from_str(&cfg_contents)?;
         if toml.tasks.contains_key("kernel") {
             bail!("'kernel' is reserved and cannot be used as a task name");
         }
-
-        let mut hasher = DefaultHasher::new();
-        hasher.write(&cfg_contents);
 
         // The app.toml must include a `chip` key, which defines the peripheral
         // register map in a separate file.  We load it then accumulate that
@@ -85,7 +132,7 @@ impl Config {
                 cfg.parent().unwrap().join(&toml.chip).join("chip.toml");
             let chip_contents = std::fs::read(chip_file)?;
             hasher.write(&chip_contents);
-            toml::from_slice(&chip_contents)?
+            toml::from_str(std::str::from_utf8(&chip_contents)?)?
         };
 
         let outputs: IndexMap<String, Vec<Output>> = {
@@ -100,7 +147,7 @@ impl Config {
                     format!("reading chip file {}", chip_file.display())
                 })?;
             hasher.write(&chip_contents);
-            toml::from_slice::<IndexMap<String, Vec<Output>>>(&chip_contents)?
+            toml::from_str(std::str::from_utf8(&chip_contents)?)?
         };
 
         let buildhash = hasher.finish();
@@ -125,8 +172,10 @@ impl Config {
             image_names: img_names,
             external_images: toml.external_images,
             chip: toml.chip,
+            epoch: toml.epoch,
+            version: toml.version,
+            fwid: toml.fwid,
             signing: toml.signing,
-            secure_separation: toml.secure_separation,
             stacksize: toml.stacksize,
             kernel: toml.kernel,
             outputs,
@@ -137,7 +186,8 @@ impl Config {
             auxflash,
             buildhash,
             app_toml_path: cfg.to_owned(),
-            secure_task: toml.secure_task,
+            app_config: cfg_contents,
+            caboose: toml.caboose,
         })
     }
 
@@ -202,6 +252,11 @@ impl Config {
         let task_names =
             self.tasks.keys().cloned().collect::<Vec<_>>().join(",");
         env.insert("HUBRIS_TASKS".to_string(), task_names);
+        env.insert(
+            "HUBRIS_BUILD_VERSION".to_string(),
+            format!("{}", self.version),
+        );
+        env.insert("HUBRIS_BUILD_EPOCH".to_string(), format!("{}", self.epoch));
         env.insert("HUBRIS_BOARD".to_string(), self.board.to_string());
         env.insert(
             "HUBRIS_APP_TOML".to_string(),
@@ -218,21 +273,6 @@ impl Config {
                     format!("{:?}", checksum),
                 );
             }
-        }
-
-        // secure_separation indicates that we have TrustZone enabled.
-        // When TrustZone is enabled, the bootloader is secure and hubris is
-        // not secure.
-        // When TrustZone is not enabled, both the bootloader and Hubris are
-        // secure.
-        if let Some(s) = self.secure_separation {
-            if s {
-                env.insert("HUBRIS_SECURE".to_string(), "0".to_string());
-            } else {
-                env.insert("HUBRIS_SECURE".to_string(), "1".to_string());
-            }
-        } else {
-            env.insert("HUBRIS_SECURE".to_string(), "1".to_string());
         }
 
         if let Some(app_config) = &self.config {
@@ -294,16 +334,44 @@ impl Config {
         // via environment variables to build.rs scripts that may choose to
         // incorporate configuration into compilation.
         //
-        if let Some(config) = &task_toml.config {
-            let task_config = toml::to_string(&config).unwrap();
-            out.env
-                .insert("HUBRIS_TASK_CONFIG".to_string(), task_config);
-        }
+        let task_config = toml::to_string(&task_toml).unwrap();
+        out.env
+            .insert("HUBRIS_TASK_CONFIG".to_string(), task_config);
+
+        let all_task_config = toml::to_string(&self.tasks).unwrap();
+        out.env
+            .insert("HUBRIS_ALL_TASK_CONFIGS".to_string(), all_task_config);
 
         // Expose the current task's name to allow for better error messages if
         // a required configuration section is missing
         out.env
             .insert("HUBRIS_TASK_NAME".to_string(), task_name.to_string());
+
+        //
+        // Expose any external memories that a task is using should the
+        // task wish to generate code around them.
+        //
+        let mut extern_regions = IndexMap::new();
+
+        for name in &task_toml.extern_regions {
+            if let Some(r) = self.outputs.get(name) {
+                let region = (r[0].address, r[0].size);
+
+                if !r.iter().all(|r| (r.address, r.size) == region) {
+                    return Err(format!(
+                        "extern region {name} has inconsistent \
+                        address/size across images: {r:?}"
+                    ));
+                }
+
+                extern_regions.insert(name, region);
+            }
+        }
+
+        out.env.insert(
+            "HUBRIS_TASK_EXTERN_REGIONS".to_string(),
+            toml::to_string(&extern_regions).unwrap(),
+        );
 
         Ok(out)
     }
@@ -313,14 +381,20 @@ impl Config {
     /// This is useful when allocating memory for tasks
     pub fn memories(
         &self,
-        image_name: &String,
+        image_name: &str,
     ) -> Result<IndexMap<String, Range<u32>>> {
         self.outputs
             .iter()
             .map(|(name, out)| {
-                let region : Vec<&Output>= out.iter().filter(|o| o.name == *image_name).collect();
+                let region : Vec<&Output>= out.iter().filter(
+                    |o| o.name == *image_name
+                ).collect();
                 if region.len() > 1 {
-                    bail!("Multiple regions defined for image {}", image_name);
+                    bail!("Multiple regions defined for image {image_name}");
+                }
+
+                if region.is_empty() {
+                    bail!("Missing region for {name} in image {image_name}");
                 }
 
                 let r = region[0];
@@ -352,20 +426,6 @@ impl Config {
 
         for o in outputs {
             memories.insert(o.name.clone(), o.address..o.address + o.size);
-        }
-
-        Ok(memories)
-    }
-
-    pub fn image_memories(
-        &self,
-        region: String,
-    ) -> Result<IndexMap<String, Range<u32>>> {
-        let mut memories: IndexMap<String, Range<u32>> = IndexMap::new();
-        for a in &self.external_images {
-            if let Some(r) = self.memories(a)?.get(&region) {
-                memories.insert(a.clone(), r.start..r.end);
-            }
         }
 
         Ok(memories)
@@ -423,9 +483,34 @@ impl Config {
         self.image_names.contains(name)
     }
 
-    pub fn need_tz_linker(&self, name: &str) -> bool {
-        self.tasks[name].uses_secure_entry
-            || self.secure_task.as_ref().map_or(false, |n| n == name)
+    pub fn extern_regions_for(
+        &self,
+        task: &str,
+        image_name: &str,
+    ) -> Result<IndexMap<String, Range<u32>>> {
+        self.tasks
+            .get(task)
+            .ok_or_else(|| anyhow!("no such task {task}"))?
+            .extern_regions
+            .iter()
+            .map(|r| {
+                let mut regions = self
+                    .outputs
+                    .get(r)
+                    .ok_or_else(|| anyhow!("invalid extern region {r}"))?
+                    .iter()
+                    .filter(|o| &o.name == image_name);
+                let out = regions.next().expect("no extern region for name");
+                if regions.next().is_some() {
+                    bail!(
+                        "multiple extern {} regions for name {}",
+                        r,
+                        image_name
+                    );
+                }
+                Ok((r.to_owned(), out.address..out.address + out.size))
+            })
+            .collect::<Result<IndexMap<String, Range<u32>>>>()
     }
 }
 
@@ -459,37 +544,9 @@ impl MpuAlignment {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SigningMethod {
-    Crc,
-    Rsa,
-    Ecc,
-}
-
-impl std::fmt::Display for SigningMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Crc => "crc",
-            Self::Rsa => "rsa",
-            Self::Ecc => "ecc",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct Signing {
-    pub priv_key: PathBuf,
-    pub root_cert: PathBuf,
-    #[serde(default)]
-    pub enable_dice: bool,
-    #[serde(default)]
-    pub dice_inc_nxp_cfg: bool,
-    #[serde(default)]
-    pub dice_cust_cfg: bool,
-    #[serde(default)]
-    pub dice_inc_sec_epoch: bool,
+pub struct RoTMfgSettings {
+    pub certs: lpc55_sign::signed_image::CertConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -506,7 +563,7 @@ fn default_name() -> String {
     "default".to_string()
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Output {
     #[serde(default = "default_name")]
@@ -523,33 +580,7 @@ pub struct Output {
     pub dma: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct Task {
-    pub name: String,
-    #[serde(default)]
-    pub max_sizes: IndexMap<String, u32>,
-    pub priority: u8,
-    pub stacksize: Option<u32>,
-    #[serde(default)]
-    pub uses: Vec<String>,
-    #[serde(default)]
-    pub start: bool,
-    #[serde(default)]
-    pub features: Vec<String>,
-    #[serde(default)]
-    pub interrupts: IndexMap<String, u32>,
-    #[serde(default)]
-    pub sections: IndexMap<String, String>,
-    #[serde(default, deserialize_with = "deserialize_task_slot")]
-    pub task_slots: IndexMap<String, String>,
-    #[serde(default)]
-    pub config: Option<ordered_toml::Value>,
-    #[serde(default)]
-    pub uses_secure_entry: bool,
-}
-
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Peripheral {
     pub address: u32,
@@ -558,54 +589,7 @@ pub struct Peripheral {
     pub interrupts: BTreeMap<String, u32>,
 }
 
-/// In the common case, task slots map back to a task of the same name (e.g.
-/// `gpio_driver`, `rcc_driver`).  However, certain tasks need generic task
-/// slot names, e.g. they'll have a task slot named `spi_driver` which will
-/// be mapped to a specific SPI driver task (`spi2_driver`).
-///
-/// This deserializer lets us handle both cases, while making the common case
-/// easiest to write.  In `app.toml`, you can write something like
-/// ```toml
-/// task-slots = [
-///     "gpio_driver",
-///     "i2c_driver",
-///     "rcc_driver",
-///     {spi_driver: "spi2_driver"},
-/// ]
-/// ```
-fn deserialize_task_slot<'de, D>(
-    deserializer: D,
-) -> Result<IndexMap<String, String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Clone, Debug, Deserialize)]
-    #[serde(untagged)]
-    enum ArrayItem {
-        Identity(String),
-        Remap(IndexMap<String, String>),
-    }
-    let s: Vec<ArrayItem> = serde::Deserialize::deserialize(deserializer)?;
-    let mut out = IndexMap::new();
-    for a in s {
-        match a {
-            ArrayItem::Identity(s) => {
-                out.insert(s.clone(), s.clone());
-            }
-            ArrayItem::Remap(m) => {
-                if m.len() != 1 {
-                    return Err(serde::de::Error::invalid_length(
-                        m.len(),
-                        &"a single key-value pair",
-                    ));
-                }
-                let (k, v) = m.iter().next().unwrap();
-                out.insert(k.to_string(), v.to_string());
-            }
-        }
-    }
-    Ok(out)
-}
+pub use toml_task::Task;
 
 /// Stores arguments and environment variables to run on a particular task.
 pub struct BuildConfig<'a> {
@@ -614,8 +598,8 @@ pub struct BuildConfig<'a> {
     /// File written by the compiler
     pub out_path: PathBuf,
 
-    args: Vec<String>,
-    env: BTreeMap<String, String>,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
 
     /// Optional sysroot to a specific Rust installation.  If this is
     /// specified, then `cargo` is called from the sysroot instead of using
@@ -641,15 +625,25 @@ impl BuildConfig<'_> {
             None => PathBuf::from("cargo"),
         });
 
-        // nightly features that we use: asm_sym,asm_const,
-        // named-profiles,naked_functions,cmse_nonsecure_entry,array_methods
-        //
-        // nightly features that our dependencies use: backtrace,proc_macro_span
+        let mut nightly_features = vec![];
+        // nightly features that we use:
+        nightly_features.extend([
+            "array_methods",
+            "asm_const",
+            "naked_functions",
+            "named-profiles",
+            "used_with_arg",
+        ]);
+        // nightly features that our dependencies use:
+        nightly_features.extend([
+            "backtrace",
+            "error_generic_member_access",
+            "proc_macro_span",
+            "proc_macro_span_shrink",
+            "provide_any",
+        ]);
 
-        cmd.arg(
-            "-Zallow-features=asm_sym,asm_const,named-profiles,naked_functions,\
-cmse_nonsecure_entry,array_methods,backtrace,proc_macro_span",
-        );
+        cmd.arg(format!("-Zallow-features={}", nightly_features.join(",")));
 
         cmd.arg(subcommand);
         cmd.arg("-p").arg(&self.crate_name);
@@ -661,4 +655,76 @@ cmse_nonsecure_entry,array_methods,backtrace,proc_macro_span",
         }
         cmd
     }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+fn read_and_flatten_toml(
+    cfg: &Path,
+    hasher: &mut DefaultHasher,
+    seen: &mut BTreeSet<PathBuf>,
+) -> Result<toml_edit::Document> {
+    use toml_patch::merge_toml_documents;
+
+    // Prevent diamond inheritance
+    if !seen.insert(cfg.to_owned()) {
+        bail!(
+            "{cfg:?} is inherited more than once; \
+             diamond dependencies are not allowed"
+        );
+    }
+    let cfg_contents = std::fs::read(&cfg)
+        .with_context(|| format!("could not read {}", cfg.display()))?;
+
+    // Accumulate the contents into the buildhash here, so that we hash both
+    // the inheritance file and the target (recursively, if necessary)
+    hasher.write(&cfg_contents);
+
+    let cfg_contents = std::str::from_utf8(&cfg_contents)
+        .context("failed to read manifest as UTF-8")?;
+
+    // Additive TOML file inheritance
+    let mut doc = cfg_contents
+        .parse::<toml_edit::Document>()
+        .context("failed to parse TOML file")?;
+    let Some(inherited_from) = doc.remove("inherit") else {
+        // No further inheritance, so return the current document
+        return Ok(doc);
+    };
+
+    use toml_edit::{Item, Value};
+    let mut original = match inherited_from {
+        // Single inheritance
+        Item::Value(Value::String(s)) => {
+            let file = cfg.parent().unwrap().join(s.value());
+            read_and_flatten_toml(&file, hasher, seen)
+                .with_context(|| format!("Could not load {file:?}"))?
+        }
+        // Multiple inheritance, applied sequentially
+        Item::Value(Value::Array(a)) => {
+            let mut doc: Option<toml_edit::Document> = None;
+            for a in a.iter() {
+                if let Value::String(s) = a {
+                    let file = cfg.parent().unwrap().join(s.value());
+                    let next: toml_edit::Document =
+                        read_and_flatten_toml(&file, hasher, seen)
+                            .with_context(|| {
+                                format!("Could not load {file:?}")
+                            })?;
+                    match doc.as_mut() {
+                        Some(doc) => merge_toml_documents(doc, next)?,
+                        None => doc = Some(next),
+                    }
+                } else {
+                    bail!("could not inherit from {a}; bad type");
+                }
+            }
+            doc.ok_or_else(|| anyhow!("inherit array cannot be empty"))?
+        }
+        v => bail!("could not inherit from {v}; bad type"),
+    };
+
+    // Finally, apply any changes that are local in this file
+    merge_toml_documents(&mut original, doc)?;
+    Ok(original)
 }

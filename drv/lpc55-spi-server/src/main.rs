@@ -8,7 +8,6 @@
 #![no_std]
 #![no_main]
 
-use drv_lpc55_gpio_api::Pin;
 use drv_lpc55_spi as spi_core;
 use drv_lpc55_syscon_api::{Peripheral, Syscon};
 use lpc55_pac as device;
@@ -68,7 +67,7 @@ fn main() -> ! {
     let mut a_bytes: [u8; 8] = [0xaa; 8];
     let mut b_bytes: [u8; 8] = [0; 8];
 
-    sys_irq_control(1, true);
+    sys_irq_control(notifications::SPI_IRQ_MASK, true);
 
     let mut tx = &mut a_bytes;
     let mut rx = &mut b_bytes;
@@ -84,7 +83,9 @@ fn main() -> ! {
     let mut rx_done = false;
 
     loop {
-        if sys_recv_closed(&mut [], 1, TaskId::KERNEL).is_err() {
+        if sys_recv_closed(&mut [], notifications::SPI_IRQ_MASK, TaskId::KERNEL)
+            .is_err()
+        {
             panic!()
         }
 
@@ -104,7 +105,7 @@ fn main() -> ! {
                 again = true;
             }
 
-            if spi.has_byte() && !rx_done {
+            if spi.has_entry() && !rx_done {
                 let b = spi.read_u8();
                 ringbuf_entry!(Trace::Rx(b));
                 rx[rx_cnt] = b;
@@ -129,18 +130,20 @@ fn main() -> ! {
             rx_cnt = 0;
         }
 
-        sys_irq_control(1, true);
+        sys_irq_control(notifications::SPI_IRQ_MASK, true);
     }
 }
 
 fn turn_on_flexcomm(syscon: &Syscon) {
     // HSLSPI = High Speed Spi = Flexcomm 8
     // The L stands for Let this just be named consistently for once
-    syscon.enable_clock(Peripheral::HsLspi).unwrap_lite();
-    syscon.leave_reset(Peripheral::HsLspi).unwrap_lite();
+    syscon.enable_clock(Peripheral::HsLspi);
+    syscon.leave_reset(Peripheral::HsLspi);
 
-    syscon.enable_clock(Peripheral::Fc3).unwrap_lite();
-    syscon.leave_reset(Peripheral::Fc3).unwrap_lite();
+    syscon.enable_clock(Peripheral::Fc3);
+    syscon.leave_reset(Peripheral::Fc3);
 }
 
 include!(concat!(env!("OUT_DIR"), "/pin_config.rs"));
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

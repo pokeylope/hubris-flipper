@@ -141,9 +141,9 @@ address = 0x40014400
 size = 0x400
 interrupts = { irq = 117 }
 
-[bank2]
-address = 0x08100000
-size = 0x00100000
+[dbgmcu]
+address = 0x5C001000
+size = 128 # 96 bytes of actual data, rounding up to a power of two
 
 #[cryp]
 #address = 0x48021000

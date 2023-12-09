@@ -1,13 +1,15 @@
 [package]
 name = "hubris-num-tasks"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
-[dependencies]
+[build-dependencies]
+build-util = { path = "../../build/util" }
 
 [features]
 task-enum = []
 
 [lib]
 test = false
+doctest = false
 bench = false

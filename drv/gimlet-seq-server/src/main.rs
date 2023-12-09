@@ -15,10 +15,12 @@ use userlib::*;
 use drv_gimlet_hf_api as hf_api;
 use drv_gimlet_seq_api::{PowerState, SeqError};
 use drv_ice40_spi_program as ice40;
-use drv_spi_api as spi_api;
+use drv_packrat_vpd_loader::{read_vpd_and_load_packrat, Packrat};
+use drv_spi_api::{SpiDevice, SpiServer};
 use drv_stm32xx_sys_api as sys_api;
 use idol_runtime::{NotificationHandler, RequestError};
 use seq_spi::{Addr, Reg};
+use static_assertions::const_assert;
 use task_jefe_api::Jefe;
 
 task_slot!(SYS, sys);
@@ -26,9 +28,19 @@ task_slot!(SPI, spi_driver);
 task_slot!(I2C, i2c_driver);
 task_slot!(HF, hf);
 task_slot!(JEFE, jefe);
+task_slot!(PACKRAT, packrat);
 
 include!(concat!(env!("OUT_DIR"), "/i2c_config.rs"));
 
+#[cfg_attr(target_board = "gimlet-b", path = "payload_b.rs")]
+#[cfg_attr(
+    any(
+        target_board = "gimlet-c",
+        target_board = "gimlet-d",
+        target_board = "gimlet-e",
+    ),
+    path = "payload_cde.rs"
+)]
 mod payload;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -43,29 +55,75 @@ enum Trace {
     Ice40PowerGoodV3P3(bool),
     RailsOff,
     Ident(u16),
-    A1Status(u8),
+    A2Status(u8),
     A2,
-    A1Power(u8, u8),
+    A0FailureDetails(Addr, u8),
+    A0Failed(SeqError),
+    A1Status(u8),
+    CPUPresent(bool),
+    Coretype {
+        coretype: bool,
+        sp3r1: bool,
+        sp3r2: bool,
+    },
+    A0Status(u8),
     A0Power(u8),
     NICPowerEnableLow(bool),
     RailsOn,
     UartEnabled,
-    GetState,
-    SetState(PowerState, PowerState),
+    A0(u16),
+    SetState(PowerState, PowerState, u64),
+    UpdateState(PowerState),
     ClockConfigWrite,
     ClockConfigSuccess,
-    Status(u8, u8, u8),
+    Status {
+        ier: u8,
+        ifr: u8,
+        amd_status: u8,
+        amd_a0: u8,
+    },
+    PGStatus {
+        b_pg: u8,
+        c_pg: u8,
+        nic: u8,
+    },
+    SMStatus {
+        a1: u8,
+        a0: u8,
+    },
+    ResetCounts {
+        rstn: u8,
+        pwrokn: u8,
+    },
+    PowerControl(u8),
+    InterruptFlags(u8),
+    V3P3SysA0VOut(units::Volts),
+
+    SpdBankAbsent(u8),
+    SpdAbsent(u8, u8, u8),
+    SpdDimmsFound(usize),
+
     None,
 }
 
-ringbuf!(Trace, 64, Trace::None);
+ringbuf!(Trace, 128, Trace::None);
 
 #[export_name = "main"]
 fn main() -> ! {
-    let spi = spi_api::Spi::from(SPI.get_task_id());
+    let spi = drv_spi_api::Spi::from(SPI.get_task_id());
     let sys = sys_api::Sys::from(SYS.get_task_id());
     let jefe = Jefe::from(JEFE.get_task_id());
     let hf = hf_api::HostFlash::from(HF.get_task_id());
+
+    // Ensure the SP fault pin is configured as an open-drain output, and pull
+    // it low to make the sequencer restart externally visible.
+    sys.gpio_configure_output(
+        FAULT_PIN_L,
+        sys_api::OutputType::OpenDrain,
+        sys_api::Speed::Low,
+        sys_api::Pull::None,
+    );
+    sys.gpio_reset(FAULT_PIN_L);
 
     // Turn off the chassis LED, in case this is a task restart (and not a
     // full chip restart, which would leave the GPIO unconfigured).
@@ -74,9 +132,8 @@ fn main() -> ! {
         sys_api::OutputType::PushPull,
         sys_api::Speed::Low,
         sys_api::Pull::None,
-    )
-    .unwrap();
-    sys.gpio_reset(CHASSIS_LED).unwrap();
+    );
+    sys.gpio_reset(CHASSIS_LED);
 
     // To allow for the possibility that we are restarting, rather than
     // starting, we take care during early sequencing to _not turn anything
@@ -86,11 +143,16 @@ fn main() -> ! {
     // Unconditionally set our power-good detects as inputs.
     //
     // This is the expected reset state, but, good to be sure.
-    sys.gpio_configure_input(PGS_PINS, PGS_PULL).unwrap();
+    sys.gpio_configure_input(PGS_PINS, PGS_PULL);
 
     // Set SP3_TO_SP_NIC_PWREN_L to be an input
-    sys.gpio_configure_input(NIC_PWREN_L_PINS, NIC_PWREN_L_PULL)
-        .unwrap();
+    sys.gpio_configure_input(NIC_PWREN_L_PINS, NIC_PWREN_L_PULL);
+
+    // Set all of the presence-related pins to be inputs
+    sys.gpio_configure_input(CORETYPE, CORETYPE_PULL);
+    sys.gpio_configure_input(CPU_PRESENT_L, CPU_PRESENT_L_PULL);
+    sys.gpio_configure_input(SP3R1, SP3R1_PULL);
+    sys.gpio_configure_input(SP3R2, SP3R2_PULL);
 
     // Unconditionally set our sequencing-related GPIOs to outputs.
     //
@@ -106,8 +168,7 @@ fn main() -> ! {
         sys_api::OutputType::PushPull,
         sys_api::Speed::High,
         sys_api::Pull::None,
-    )
-    .unwrap();
+    );
 
     // To talk to the sequencer we need to configure its pins, obvs. Note that
     // the SPI and CS lines are separately managed by the SPI server; the ice40
@@ -115,7 +176,7 @@ fn main() -> ! {
     // generate surprise resets.
     ice40::configure_pins(&sys, &ICE40_CONFIG);
 
-    let pg = sys.gpio_read_input(PGS_PORT).unwrap();
+    let pg = sys.gpio_read_input(PGS_PORT);
     let v1p2 = pg & PG_V1P2_MASK != 0;
     let v3p3 = pg & PG_V3P3_MASK != 0;
 
@@ -124,7 +185,7 @@ fn main() -> ! {
     // Force iCE40 CRESETB low before turning power on. This is nice because it
     // prevents the iCE40 from racing us and deciding it should try to load from
     // Flash. TODO: this may cause trouble with hot restarts, test.
-    sys.gpio_reset(ICE40_CONFIG.creset).unwrap();
+    sys.gpio_reset(ICE40_CONFIG.creset);
 
     // Begin, or resume, the power supply sequencing process for the FPGA. We're
     // going to be reading back our enable line states to get the real state
@@ -134,7 +195,7 @@ fn main() -> ! {
     // of ours. Ensuring that it's on by writing the pin is just as cheap as
     // sensing its current state, and less code than _conditionally_ writing the
     // pin, so:
-    sys.gpio_set(ENABLE_V1P2).unwrap();
+    sys.gpio_set(ENABLE_V1P2);
 
     // We don't actually know how long ago the regulator turned on. Could have
     // been _just now_ (above) or may have already been on. We'll use the PG pin
@@ -147,7 +208,7 @@ fn main() -> ! {
     // Now, monitor the PG pin.
     loop {
         // active high
-        let pg = sys.gpio_read_input(PGS_PORT).unwrap() & PG_V1P2_MASK != 0;
+        let pg = sys.gpio_read_input(PGS_PORT) & PG_V1P2_MASK != 0;
         ringbuf_entry!(Trace::Ice40PowerGoodV1P2(pg));
         if pg {
             break;
@@ -160,7 +221,7 @@ fn main() -> ! {
     }
 
     // We believe V1P2 is good. Now, for V3P3! Set it active (high).
-    sys.gpio_set(ENABLE_V3P3).unwrap();
+    sys.gpio_set(ENABLE_V3P3);
 
     // Delay to be sure.
     hl::sleep_for(2);
@@ -168,7 +229,7 @@ fn main() -> ! {
     // Now, monitor the PG pin.
     loop {
         // active high
-        let pg = sys.gpio_read_input(PGS_PORT).unwrap() & PG_V3P3_MASK != 0;
+        let pg = sys.gpio_read_input(PGS_PORT) & PG_V3P3_MASK != 0;
         ringbuf_entry!(Trace::Ice40PowerGoodV3P3(pg));
         if pg {
             break;
@@ -186,48 +247,27 @@ fn main() -> ! {
     // Sequencer FPGA power supply sequencing (meta-sequencing?) is complete.
 
     // Now, let's find out if we need to program the sequencer.
-
-    if let Some(hacks) = FPGA_HACK_PINS {
-        // Some boards require certain pins to be put in certain states before
-        // we can perform SPI communication with the design (rather than the
-        // programming port). If this is such a board, apply those changes:
-        for &(pin, is_high) in hacks {
-            if is_high {
-                sys.gpio_set(pin).unwrap();
-            } else {
-                sys.gpio_reset(pin).unwrap();
-            }
-
-            sys.gpio_configure_output(
-                pin,
-                sys_api::OutputType::PushPull,
-                sys_api::Speed::High,
-                sys_api::Pull::None,
-            )
-            .unwrap();
-        }
-    }
-
     if let Some(pin) = GLOBAL_RESET {
         // Also configure our design reset net -- the signal that resets the
         // logic _inside_ the FPGA instead of the FPGA itself. We're assuming
         // push-pull because all our boards with reset nets are lacking pullups
         // right now. It's active low, so, set up the pin before exposing the
         // output to ensure we don't glitch.
-        sys.gpio_set(pin).unwrap();
+        sys.gpio_set(pin);
         sys.gpio_configure_output(
             pin,
             sys_api::OutputType::PushPull,
             sys_api::Speed::High,
             sys_api::Pull::None,
-        )
-        .unwrap();
+        );
     }
 
     // If the sequencer is already loaded and operational, the design loaded
     // into it should be willing to talk to us over SPI, and should be able to
     // serve up a recognizable ident code.
-    let seq = seq_spi::SequencerFpga::new(spi.device(SEQ_SPI_DEVICE));
+    let seq = seq_spi::SequencerFpga::new(
+        spi.device(drv_spi_api::devices::SEQUENCER),
+    );
 
     // If the image announces the correct identifier and has a matching
     // bitstream checksum, then we can skip reprogramming;
@@ -246,12 +286,12 @@ fn main() -> ! {
             // Assert the design reset signal (not the same as the FPGA
             // programming logic reset signal). We do this during reprogramming
             // to avoid weird races that make our brains hurt.
-            sys.gpio_reset(pin).unwrap();
+            sys.gpio_reset(pin);
         }
 
         // Reprogramming will continue until morale improves -- to a point.
         loop {
-            let prog = spi.device(ICE40_SPI_DEVICE);
+            let prog = spi.device(drv_spi_api::devices::ICE40);
             ringbuf_entry!(Trace::Programming);
             match reprogram_fpga(&prog, &sys, &ICE40_CONFIG) {
                 Ok(()) => {
@@ -270,7 +310,7 @@ fn main() -> ! {
         if let Some(pin) = GLOBAL_RESET {
             // Deassert design reset signal. We set the pin, as it's
             // active low.
-            sys.gpio_set(pin).unwrap();
+            sys.gpio_set(pin);
         }
 
         // Store our bitstream checksum in the FPGA's checksum registers
@@ -278,7 +318,7 @@ fn main() -> ! {
         // programming the FPGA image (e.g. if this task restarts or the SP
         // itself is reflashed), and used to decide whether FPGA programming
         // is required.
-        seq.write_checksum().unwrap();
+        seq.write_checksum().unwrap_lite();
     }
 
     ringbuf_entry!(Trace::Programmed);
@@ -286,14 +326,14 @@ fn main() -> ! {
     vcore_soc_off();
     ringbuf_entry!(Trace::RailsOff);
 
-    let ident = seq.read_ident().unwrap();
+    let ident = seq.read_ident().unwrap_lite();
     ringbuf_entry!(Trace::Ident(ident));
 
     loop {
         let mut status = [0u8];
 
-        seq.read_bytes(Addr::PWR_CTRL, &mut status).unwrap();
-        ringbuf_entry!(Trace::A1Status(status[0]));
+        seq.read_bytes(Addr::PWR_CTRL, &mut status).unwrap_lite();
+        ringbuf_entry!(Trace::A2Status(status[0]));
 
         if status[0] == 0 {
             break;
@@ -320,66 +360,216 @@ fn main() -> ! {
             Ok(())
         }
     })
-    .unwrap();
+    .unwrap_lite();
+
+    // Populate packrat with our mac address and identity.
+    let packrat = Packrat::from(PACKRAT.get_task_id());
+    read_vpd_and_load_packrat(&packrat, I2C.get_task_id());
 
     jefe.set_state(PowerState::A2 as u32);
 
     ringbuf_entry!(Trace::ClockConfigSuccess);
+    ringbuf_entry_v3p3_sys_a0_vout();
     ringbuf_entry!(Trace::A2);
 
+    // After declaring A2 but before transitioning to A0 (either automatically
+    // or in response to an IPC), populate packrat with EEPROM contents for use
+    // by the SPD task.
+    //
+    // Per JEDEC 1791.12a, we must wait for tINIT (10ms) between power on and
+    // sending the first SPD command.
+    hl::sleep_for(10);
+    read_spd_data_and_load_packrat(&packrat, I2C.get_task_id());
+
     // Turn on the chassis LED once we reach A2
-    sys.gpio_set(CHASSIS_LED).unwrap();
+    sys.gpio_set(CHASSIS_LED);
 
     let mut buffer = [0; idl::INCOMING_SIZE];
     let mut server = ServerImpl {
         state: PowerState::A2,
+        sys: sys.clone(),
         seq,
         jefe,
         hf,
         deadline: 0,
     };
 
+    // Power on, unless suppressed by the `stay-in-a2` feature
+    if !cfg!(feature = "stay-in-a2") {
+        _ = server.set_state_internal(PowerState::A0);
+    }
+
+    //
+    // Configure the NMI pin. Note that this needs to be configured as open
+    // drain rather than push/pull:  SP_TO_SP3_NMI_SYNC_FLOOD_L is pulled up
+    // to V3P3_SYS_A0 (by R5583) and we do not want to backdrive it when in
+    // A2, lest we prevent the PCA9535 GPIO expander (U307) from resetting!
+    //
+    sys.gpio_set(SP_TO_SP3_NMI_SYNC_FLOOD_L);
+    sys.gpio_configure_output(
+        SP_TO_SP3_NMI_SYNC_FLOOD_L,
+        sys_api::OutputType::OpenDrain,
+        sys_api::Speed::Low,
+        sys_api::Pull::None,
+    );
+
+    // Clear the external fault now that we're about to start serving messages
+    // and fewer things can go wrong.
+    sys.gpio_set(FAULT_PIN_L);
+
     loop {
         idol_runtime::dispatch_n(&mut buffer, &mut server);
     }
 }
 
-struct ServerImpl {
+fn read_spd_data_and_load_packrat(packrat: &Packrat, i2c_task: TaskId) {
+    use drv_gimlet_seq_api::NUM_SPD_BANKS;
+    use drv_i2c_api::{Controller, I2cDevice, Mux, PortIndex, Segment};
+
+    type SpdBank = (Controller, PortIndex, Option<(Mux, Segment)>);
+
+    cfg_if::cfg_if! {
+        if #[cfg(any(
+            target_board = "gimlet-b",
+            target_board = "gimlet-c",
+            target_board = "gimlet-d",
+            target_board = "gimlet-e",
+        ))] {
+            //
+            // On Gimlet, we have two banks of up to 8 DIMMs apiece:
+            //
+            // - ABCD DIMMs are on the mid bus (I2C3, port H)
+            // - EFGH DIMMS are on the rear bus (I2C4, port F)
+            //
+            // It should go without saying that the ordering here is essential
+            // to assure that the SPD data that we return for a DIMM corresponds
+            // to the correct DIMM from the SoC's perspective.
+            //
+            const BANKS: [SpdBank; NUM_SPD_BANKS] = [
+                (Controller::I2C3, i2c_config::ports::i2c3_h(), None),
+                (Controller::I2C4, i2c_config::ports::i2c4_f(), None),
+            ];
+        } else {
+            compile_error!("I2C target unsupported for this board");
+        }
+    }
+
+    let mut npresent = 0;
+    let mut present = [false; BANKS.len() * spd::MAX_DEVICES as usize];
+    let mut tmp = [0u8; 256];
+
+    // For each bank, we're going to iterate over each device, reading all 512
+    // bytes of SPD data from each.
+    for nbank in 0..BANKS.len() as u8 {
+        let (controller, port, mux) = BANKS[nbank as usize];
+
+        let addr = spd::Function::PageAddress(spd::Page(0))
+            .to_device_code()
+            .unwrap_lite();
+        let page = I2cDevice::new(i2c_task, controller, port, None, addr);
+
+        if page.write(&[0]).is_err() {
+            // If our operation fails, we are going to assume that there
+            // are no DIMMs on this bank.
+            ringbuf_entry!(Trace::SpdBankAbsent(nbank));
+            continue;
+        }
+
+        for i in 0..spd::MAX_DEVICES {
+            let mem = spd::Function::Memory(i).to_device_code().unwrap_lite();
+            let spd = I2cDevice::new(i2c_task, controller, port, mux, mem);
+            let ndx = (nbank * spd::MAX_DEVICES) + i;
+
+            // Try reading the first byte; if this fails, we will assume
+            // the device isn't present.
+            let first = match spd.read_reg::<u8, u8>(0) {
+                Ok(val) => {
+                    present[usize::from(ndx)] = true;
+                    npresent += 1;
+                    val
+                }
+                Err(_) => {
+                    ringbuf_entry!(Trace::SpdAbsent(nbank, i, ndx));
+                    continue;
+                }
+            };
+
+            // We'll store that byte and then read 255 more.
+            tmp[0] = first;
+
+            spd.read_into(&mut tmp[1..]).unwrap_lite();
+
+            packrat.set_spd_eeprom(ndx, false, 0, &tmp);
+        }
+
+        // Now flip over to the top page.
+        let addr = spd::Function::PageAddress(spd::Page(1))
+            .to_device_code()
+            .unwrap_lite();
+        let page = I2cDevice::new(i2c_task, controller, port, None, addr);
+
+        // We really don't expect this to fail, and if it does, tossing here
+        // seems to be best option:  things are pretty wrong.
+        page.write(&[0]).unwrap_lite();
+
+        // ...and two more reads for each (present) device.
+        for i in 0..spd::MAX_DEVICES {
+            let ndx = (nbank * spd::MAX_DEVICES) + i;
+
+            if !present[usize::from(ndx)] {
+                continue;
+            }
+
+            let mem = spd::Function::Memory(i).to_device_code().unwrap_lite();
+            let spd = I2cDevice::new(i2c_task, controller, port, mux, mem);
+
+            let chunk = 128;
+            spd.read_reg_into::<u8>(0, &mut tmp[..chunk]).unwrap_lite();
+
+            spd.read_into(&mut tmp[chunk..]).unwrap_lite();
+
+            packrat.set_spd_eeprom(ndx, true, 0, &tmp);
+        }
+    }
+
+    ringbuf_entry!(Trace::SpdDimmsFound(npresent));
+}
+
+struct ServerImpl<S: SpiServer> {
     state: PowerState,
-    seq: seq_spi::SequencerFpga,
+    sys: sys_api::Sys,
+    seq: seq_spi::SequencerFpga<S>,
     jefe: Jefe,
     hf: hf_api::HostFlash,
     deadline: u64,
 }
 
-const TIMER_MASK: u32 = 1 << 0;
 const TIMER_INTERVAL: u64 = 10;
 
-impl NotificationHandler for ServerImpl {
+impl<S: SpiServer> NotificationHandler for ServerImpl<S> {
     fn current_notification_mask(&self) -> u32 {
-        TIMER_MASK
+        notifications::TIMER_MASK
     }
 
     fn handle_notification(&mut self, _bits: u32) {
-        ringbuf_entry!(Trace::Status(
-            self.seq.read_byte(Addr::IER).unwrap(),
-            self.seq.read_byte(Addr::IFR).unwrap(),
-            self.seq.read_byte(Addr::AMD_STATUS).unwrap(),
-        ));
+        ringbuf_entry!(Trace::Status {
+            ier: self.seq.read_byte(Addr::IER).unwrap_lite(),
+            ifr: self.seq.read_byte(Addr::IFR).unwrap_lite(),
+            amd_status: self.seq.read_byte(Addr::AMD_STATUS).unwrap_lite(),
+            amd_a0: self.seq.read_byte(Addr::AMD_A0).unwrap_lite(),
+        });
 
         if self.state == PowerState::A0 || self.state == PowerState::A0PlusHP {
             //
-            // The first order of business is to check if the sequencer hit a
-            // THERMTRIP.  If it did, we need to go to A0Thermtrip and clear
-            // the bit.
+            // The first order of business is to check if sequencer saw a
+            // falling edge on PWROK (denoting a reset) or a THERMTRIP.  If it
+            // did, we will go to A0Reset or A0Thermtrip as appropriate (and
+            // if both are indicated, we will clear both conditions -- but
+            // land in A0Thermtrip).
             //
-            let thermtrip = Reg::IFR::THERMTRIP;
-            let ifr = self.seq.read_byte(Addr::IFR).unwrap();
-
-            if ifr & thermtrip != 0 {
-                self.seq.clear_bytes(Addr::IFR, &[thermtrip]).unwrap();
-                self.update_state_internal(PowerState::A0Thermtrip);
-            }
+            let ifr = self.seq.read_byte(Addr::IFR).unwrap_lite();
+            self.check_reset(ifr);
+            self.check_thermtrip(ifr);
 
             //
             // Now we need to check NIC_PWREN_L to assure that our power state
@@ -387,20 +577,24 @@ impl NotificationHandler for ServerImpl {
             // needed.
             //
             let sys = sys_api::Sys::from(SYS.get_task_id());
-            let pwren_l = sys.gpio_read(NIC_PWREN_L_PINS).unwrap() != 0;
-
-            ringbuf_entry!(Trace::NICPowerEnableLow(pwren_l));
+            let pwren_l = sys.gpio_read(NIC_PWREN_L_PINS) != 0;
 
             let cld_rst = Reg::NIC_CTRL::CLD_RST;
 
             match (self.state, pwren_l) {
                 (PowerState::A0, false) => {
-                    self.seq.clear_bytes(Addr::NIC_CTRL, &[cld_rst]).unwrap();
+                    ringbuf_entry!(Trace::NICPowerEnableLow(pwren_l));
+                    self.seq
+                        .clear_bytes(Addr::NIC_CTRL, &[cld_rst])
+                        .unwrap_lite();
                     self.update_state_internal(PowerState::A0PlusHP);
                 }
 
                 (PowerState::A0PlusHP, true) => {
-                    self.seq.set_bytes(Addr::NIC_CTRL, &[cld_rst]).unwrap();
+                    ringbuf_entry!(Trace::NICPowerEnableLow(pwren_l));
+                    self.seq
+                        .set_bytes(Addr::NIC_CTRL, &[cld_rst])
+                        .unwrap_lite();
                     self.update_state_internal(PowerState::A0);
                 }
 
@@ -410,10 +604,20 @@ impl NotificationHandler for ServerImpl {
                     //
                 }
 
-                _ => {
+                (PowerState::A0Reset, _) | (PowerState::A0Thermtrip, _) => {
+                    //
+                    // We must have just sent ourselves here; nothing to do.
+                    //
+                }
+
+                (PowerState::A2, _)
+                | (PowerState::A2PlusFans, _)
+                | (PowerState::A1, _) => {
                     //
                     // We can only be in this larger block if the state is A0
                     // or A0PlusHP; we must have matched one of the arms above.
+                    // (We deliberately exhaustively match on power state to
+                    // force any power state addition to consider this case.)
                     //
                     unreachable!();
                 }
@@ -422,15 +626,334 @@ impl NotificationHandler for ServerImpl {
 
         if let Some(interval) = self.poll_interval() {
             self.deadline += interval;
-            sys_set_timer(Some(self.deadline), TIMER_MASK);
+            sys_set_timer(Some(self.deadline), notifications::TIMER_MASK);
         }
     }
 }
 
-impl ServerImpl {
+impl<S: SpiServer> ServerImpl<S> {
     fn update_state_internal(&mut self, state: PowerState) {
+        ringbuf_entry!(Trace::UpdateState(state));
         self.state = state;
         self.jefe.set_state(state as u32);
+    }
+
+    fn set_state_internal(
+        &mut self,
+        state: PowerState,
+    ) -> Result<(), SeqError> {
+        let sys = sys_api::Sys::from(SYS.get_task_id());
+
+        let now = sys_get_timer().now;
+        ringbuf_entry!(Trace::SetState(self.state, state, now));
+
+        ringbuf_entry_v3p3_sys_a0_vout();
+
+        ringbuf_entry!(Trace::PGStatus {
+            b_pg: self.seq.read_byte(Addr::GROUPB_PG).unwrap_lite(),
+            c_pg: self.seq.read_byte(Addr::GROUPC_PG).unwrap_lite(),
+            nic: self.seq.read_byte(Addr::NIC_STATUS).unwrap_lite(),
+        });
+
+        ringbuf_entry!(Trace::SMStatus {
+            a1: self.seq.read_byte(Addr::A1SMSTATUS).unwrap_lite(),
+            a0: self.seq.read_byte(Addr::A0SMSTATUS).unwrap_lite(),
+        });
+
+        ringbuf_entry!(Trace::PowerControl(
+            self.seq.read_byte(Addr::PWR_CTRL).unwrap_lite(),
+        ));
+
+        ringbuf_entry!(Trace::InterruptFlags(
+            self.seq.read_byte(Addr::IFR).unwrap_lite(),
+        ));
+
+        match (self.state, state) {
+            (PowerState::A2, PowerState::A0) => {
+                //
+                // First, set our mux state to be the HostCPU
+                //
+                if self.hf.set_mux(hf_api::HfMuxState::HostCPU).is_err() {
+                    return Err(SeqError::MuxToHostCPUFailed);
+                }
+
+                let start = sys_get_timer().now;
+                let deadline = start + A0_TIMEOUT_MILLIS;
+
+                //
+                // We are going to pass through A1 on the way to A0.  A1 is
+                // more or less an implementation detail of our journey to A0,
+                // but we'll stop there long enough to check our presence and
+                // CPU type:  if we don't have a CPU (or have the wrong type)
+                // we want to fail cleanly rather than have the appearance of
+                // failing to sequence.
+                //
+                let a1 = Reg::PWR_CTRL::A1PWREN;
+                self.seq.write_bytes(Addr::PWR_CTRL, &[a1]).unwrap_lite();
+
+                loop {
+                    let mut status = [0u8];
+
+                    self.seq
+                        .read_bytes(Addr::A1SMSTATUS, &mut status)
+                        .unwrap_lite();
+                    ringbuf_entry!(Trace::A1Status(status[0]));
+
+                    if status[0] == Reg::A1SMSTATUS::Encoded::DONE as u8 {
+                        break;
+                    }
+
+                    if sys_get_timer().now > deadline {
+                        return Err(self.a0_failure(SeqError::A1Timeout));
+                    }
+
+                    hl::sleep_for(1);
+                }
+
+                //
+                // Check for CPU presence first, as this is the more likely
+                // failure.
+                //
+                let present = sys.gpio_read(CPU_PRESENT_L) == 0;
+                ringbuf_entry!(Trace::CPUPresent(present));
+
+                if !present {
+                    return Err(self.a0_failure(SeqError::CPUNotPresent));
+                }
+
+                let coretype = sys.gpio_read(CORETYPE) != 0;
+                let sp3r1 = sys.gpio_read(SP3R1) != 0;
+                let sp3r2 = sys.gpio_read(SP3R2) != 0;
+
+                ringbuf_entry!(Trace::Coretype {
+                    coretype,
+                    sp3r1,
+                    sp3r2
+                });
+
+                //
+                // Check that we have the type of CPU we expect:  we expect
+                // CORETYPE to be high (not connected on Family 19h), SP3R1 to
+                // be high (not connected on Type-0/Type-1/Type-2), and SP3R2
+                // to be low (VSS on Type-0/Type-1/Type-2).
+                //
+                if !coretype || !sp3r1 || sp3r2 {
+                    return Err(self.a0_failure(SeqError::UnrecognizedCPU));
+                }
+
+                //
+                // Onward to A0!
+                //
+                let a0 = Reg::PWR_CTRL::A0A_EN;
+                self.seq.write_bytes(Addr::PWR_CTRL, &[a0]).unwrap_lite();
+
+                loop {
+                    let mut status = [0u8];
+
+                    self.seq
+                        .read_bytes(Addr::A0SMSTATUS, &mut status)
+                        .unwrap_lite();
+                    ringbuf_entry!(Trace::A0Status(status[0]));
+
+                    if status[0] == Reg::A0SMSTATUS::Encoded::GROUPC_PG as u8 {
+                        break;
+                    }
+
+                    if sys_get_timer().now > deadline {
+                        return Err(self.a0_failure(SeqError::A0TimeoutGroupC));
+                    }
+
+                    hl::sleep_for(1);
+                }
+
+                //
+                // And power up!
+                //
+                vcore_soc_on();
+                ringbuf_entry!(Trace::RailsOn);
+
+                //
+                // Now wait for the end of Group C.
+                //
+                loop {
+                    let mut status = [0u8];
+
+                    self.seq
+                        .read_bytes(Addr::A0SMSTATUS, &mut status)
+                        .unwrap_lite();
+                    ringbuf_entry!(Trace::A0Power(status[0]));
+
+                    if status[0] == Reg::A0SMSTATUS::Encoded::DONE as u8 {
+                        break;
+                    }
+
+                    if sys_get_timer().now > deadline {
+                        return Err(self.a0_failure(SeqError::A0Timeout));
+                    }
+
+                    hl::sleep_for(1);
+                }
+
+                //
+                // And establish our timer to check SP3_TO_SP_NIC_PWREN_L.
+                //
+                self.deadline = sys_get_timer().now + TIMER_INTERVAL;
+                sys_set_timer(Some(self.deadline), notifications::TIMER_MASK);
+
+                //
+                // Finally, enable transmission to the SP3's UART
+                //
+                uart_sp_to_sp3_enable();
+                ringbuf_entry!(Trace::UartEnabled);
+                ringbuf_entry!(Trace::A0((sys_get_timer().now - start) as u16));
+
+                self.update_state_internal(PowerState::A0);
+                Ok(())
+            }
+
+            (PowerState::A0, PowerState::A2)
+            | (PowerState::A0PlusHP, PowerState::A2)
+            | (PowerState::A0Thermtrip, PowerState::A2)
+            | (PowerState::A0Reset, PowerState::A2) => {
+                //
+                // Flip the UART mux back to disabled
+                //
+                uart_sp_to_sp3_disable();
+
+                //
+                // To assure that we always enter A0 the same way, set CLD_RST
+                // in NIC_CTRL on our way back to A2.
+                //
+                let cld_rst = Reg::NIC_CTRL::CLD_RST;
+                self.seq.set_bytes(Addr::NIC_CTRL, &[cld_rst]).unwrap_lite();
+
+                //
+                // Start FPGA down-sequence. Clearing the enables immediately
+                // de-asserts PWR_GOOD to the SP3 processor which the EDS
+                // says is required before taking the rails out.
+                // We also need to be headed down before the rails get taken out
+                // so as not to trip a MAPO fault.
+                //
+                let a1a0 = Reg::PWR_CTRL::A1PWREN | Reg::PWR_CTRL::A0A_EN;
+                self.seq.clear_bytes(Addr::PWR_CTRL, &[a1a0]).unwrap_lite();
+
+                //
+                // FPGA de-asserts PWR_GOOD for 2 ms before yanking enables,
+                // we wait for a tick here to make sure the SPI command to the
+                // FPGA propagated and the FPGA has had time to act. AMD's EDS
+                // doesn't give a minimum time so we'll give them 1 ms.
+                //
+                hl::sleep_for(1);
+
+                vcore_soc_off();
+
+                if self.hf.set_mux(hf_api::HfMuxState::SP).is_err() {
+                    return Err(SeqError::MuxToSPFailed);
+                }
+
+                self.update_state_internal(PowerState::A2);
+                ringbuf_entry_v3p3_sys_a0_vout();
+                ringbuf_entry!(Trace::A2);
+
+                //
+                // Our rails should be draining.  We'll take two additional
+                // measurements (for a total of three) each 100 ms apart.
+                //
+                for _i in 0..2 {
+                    hl::sleep_for(100);
+                    ringbuf_entry_v3p3_sys_a0_vout();
+                }
+
+                Ok(())
+            }
+
+            _ => Err(SeqError::IllegalTransition),
+        }
+    }
+
+    fn a0_failure(&mut self, err: SeqError) -> SeqError {
+        let record_reg = |addr| {
+            ringbuf_entry!(Trace::A0FailureDetails(
+                addr,
+                self.seq.read_byte(addr).unwrap_lite(),
+            ));
+        };
+
+        //
+        // We are not going to space today.  Record information in our ring
+        // buffer to allow this to be debugged.
+        //
+        ringbuf_entry!(Trace::A0Failed(err));
+        record_reg(Addr::IFR);
+        record_reg(Addr::DBG_MAX_A0SMSTATUS);
+        record_reg(Addr::MAX_GROUPB_PG);
+        record_reg(Addr::MAX_GROUPC_PG);
+        record_reg(Addr::FLT_A0_SMSTATUS);
+        record_reg(Addr::FLT_GROUPB_PG);
+        record_reg(Addr::FLT_GROUPC_PG);
+
+        //
+        // Now put ourselves back in A2.
+        //
+        let a1a0 = Reg::PWR_CTRL::A1PWREN | Reg::PWR_CTRL::A0A_EN;
+        self.seq.clear_bytes(Addr::PWR_CTRL, &[a1a0]).unwrap_lite();
+
+        hl::sleep_for(1);
+
+        vcore_soc_off();
+        _ = self.hf.set_mux(hf_api::HfMuxState::SP);
+
+        err
+    }
+
+    //
+    // Check for a THERMTRIP, sending ourselves to A0Thermtrip if we've
+    // seen it (and knowing that the FPGA has already taken care of the
+    // time-critical bits to assure that we don't melt!).
+    //
+    fn check_thermtrip(&mut self, ifr: u8) {
+        let thermtrip = Reg::IFR::THERMTRIP;
+
+        if ifr & thermtrip != 0 {
+            self.seq.clear_bytes(Addr::IFR, &[thermtrip]).unwrap_lite();
+            self.update_state_internal(PowerState::A0Thermtrip);
+        }
+    }
+
+    //
+    // Check for a reset by looking for a latched falling edge on PWROK.
+    // (Host software explicitly configures this by setting rsttocpupwrgden
+    // in FCH::PM::RESETCONTROL1.)  The sequencer also latches the number of
+    // such edges that it has seen -- along with the number of falling edges
+    // of RESET_L.  If we have seen a host reset, we send ourselves to
+    // A0Reset.
+    //
+    fn check_reset(&mut self, ifr: u8) {
+        let pwrok_fedge = Reg::IFR::AMD_PWROK_FEDGE;
+
+        if ifr & pwrok_fedge != 0 {
+            let mut cnts = [0u8; 2];
+
+            const_assert!(Addr::AMD_RSTN_CNTS.precedes(Addr::AMD_PWROKN_CNTS));
+            self.seq
+                .read_bytes(Addr::AMD_RSTN_CNTS, &mut cnts)
+                .unwrap_lite();
+
+            let (rstn, pwrokn) = (cnts[0], cnts[1]);
+            ringbuf_entry!(Trace::ResetCounts { rstn, pwrokn });
+
+            //
+            // Clear the counts to denote that we wish to re-latch any
+            // falling PWROK/RESET_L edge.
+            //
+            self.seq
+                .write_bytes(Addr::AMD_RSTN_CNTS, &[0, 0])
+                .unwrap_lite();
+            let mask = pwrok_fedge | Reg::IFR::AMD_RSTN_FEDGE;
+            self.seq.clear_bytes(Addr::IFR, &[mask]).unwrap_lite();
+
+            self.update_state_internal(PowerState::A0Reset);
+        }
     }
 
     //
@@ -448,12 +971,11 @@ impl ServerImpl {
     }
 }
 
-impl idl::InOrderSequencerImpl for ServerImpl {
+impl<S: SpiServer> idl::InOrderSequencerImpl for ServerImpl<S> {
     fn get_state(
         &mut self,
         _: &RecvMessage,
     ) -> Result<PowerState, RequestError<SeqError>> {
-        ringbuf_entry!(Trace::GetState);
         Ok(self.state)
     }
 
@@ -462,97 +984,7 @@ impl idl::InOrderSequencerImpl for ServerImpl {
         _: &RecvMessage,
         state: PowerState,
     ) -> Result<(), RequestError<SeqError>> {
-        ringbuf_entry!(Trace::SetState(self.state, state));
-
-        match (self.state, state) {
-            (PowerState::A2, PowerState::A0) => {
-                //
-                // First, set our mux state to be the HostCPU
-                //
-                if self.hf.set_mux(hf_api::HfMuxState::HostCPU).is_err() {
-                    return Err(SeqError::MuxToHostCPUFailed.into());
-                }
-
-                //
-                // We are going to pass through A1 on the way to A0.
-                //
-                let a1a0 = Reg::PWR_CTRL::A1PWREN | Reg::PWR_CTRL::A0A_EN;
-                self.seq.write_bytes(Addr::PWR_CTRL, &[a1a0]).unwrap();
-
-                loop {
-                    let mut power = [0u8, 0u8];
-
-                    self.seq.read_bytes(Addr::A1SMSTATUS, &mut power).unwrap();
-                    ringbuf_entry!(Trace::A1Power(power[0], power[1]));
-
-                    if power[1] == 0x7 {
-                        break;
-                    }
-
-                    hl::sleep_for(1);
-                }
-
-                //
-                // And power up!
-                //
-                vcore_soc_on();
-                ringbuf_entry!(Trace::RailsOn);
-
-                //
-                // Now wait for the end of Group C.
-                //
-                loop {
-                    let mut power = [0u8];
-
-                    self.seq.read_bytes(Addr::A0SMSTATUS, &mut power).unwrap();
-                    ringbuf_entry!(Trace::A0Power(power[0]));
-
-                    if power[0] == 0xc {
-                        break;
-                    }
-
-                    hl::sleep_for(1);
-                }
-
-                //
-                // And establish our timer to check SP3_TO_SP_NIC_PWREN_L.
-                //
-                self.deadline = sys_get_timer().now + TIMER_INTERVAL;
-                sys_set_timer(Some(self.deadline), TIMER_MASK);
-
-                //
-                // Finally, enable transmission to the SP3's UART
-                //
-                uart_sp_to_sp3_enable();
-                ringbuf_entry!(Trace::UartEnabled);
-
-                self.update_state_internal(PowerState::A0);
-                Ok(())
-            }
-
-            (PowerState::A0, PowerState::A2)
-            | (PowerState::A0PlusHP, PowerState::A2)
-            | (PowerState::A0Thermtrip, PowerState::A2) => {
-                //
-                // Flip the UART mux back to disabled
-                //
-                uart_sp_to_sp3_disable();
-
-                let a1a0 = Reg::PWR_CTRL::A1PWREN | Reg::PWR_CTRL::A0A_EN;
-                self.seq.clear_bytes(Addr::PWR_CTRL, &[a1a0]).unwrap();
-                vcore_soc_off();
-
-                if self.hf.set_mux(hf_api::HfMuxState::SP).is_err() {
-                    return Err(SeqError::MuxToSPFailed.into());
-                }
-
-                self.update_state_internal(PowerState::A2);
-                ringbuf_entry!(Trace::A2);
-                Ok(())
-            }
-
-            _ => Err(RequestError::Runtime(SeqError::IllegalTransition)),
-        }
+        self.set_state_internal(state).map_err(RequestError::from)
     }
 
     fn fans_on(
@@ -560,7 +992,9 @@ impl idl::InOrderSequencerImpl for ServerImpl {
         _: &RecvMessage,
     ) -> Result<(), RequestError<SeqError>> {
         let on = Reg::EARLY_POWER_CTRL::FANPWREN;
-        self.seq.set_bytes(Addr::EARLY_POWER_CTRL, &[on]).unwrap();
+        self.seq
+            .set_bytes(Addr::EARLY_POWER_CTRL, &[on])
+            .unwrap_lite();
         Ok(())
     }
 
@@ -571,13 +1005,42 @@ impl idl::InOrderSequencerImpl for ServerImpl {
         let off = Reg::EARLY_POWER_CTRL::FANPWREN;
         self.seq
             .clear_bytes(Addr::EARLY_POWER_CTRL, &[off])
-            .unwrap();
+            .unwrap_lite();
         Ok(())
+    }
+
+    fn send_hardware_nmi(
+        &mut self,
+        _: &RecvMessage,
+    ) -> Result<(), RequestError<core::convert::Infallible>> {
+        // The required length for an NMI pulse is apparently not documented.
+        //
+        // Let's try 25 ms!
+        self.sys.gpio_reset(SP_TO_SP3_NMI_SYNC_FLOOD_L);
+        hl::sleep_for(25);
+        self.sys.gpio_set(SP_TO_SP3_NMI_SYNC_FLOOD_L);
+        Ok(())
+    }
+
+    fn read_fpga_regs(
+        &mut self,
+        _: &RecvMessage,
+    ) -> Result<[u8; 64], RequestError<SeqError>> {
+        let mut buf = [0; 64];
+        let size = 8;
+
+        for i in (0..buf.len()).step_by(size) {
+            self.seq
+                .read_bytes(i as u16, &mut buf[i..i + size])
+                .map_err(|_| SeqError::ReadRegsFailed)?;
+        }
+
+        Ok(buf)
     }
 }
 
-fn reprogram_fpga(
-    spi: &spi_api::SpiDevice,
+fn reprogram_fpga<S: SpiServer>(
+    spi: &SpiDevice<S>,
     sys: &sys_api::Sys,
     config: &ice40::Config,
 ) -> Result<(), ice40::Ice40Error> {
@@ -602,9 +1065,13 @@ static COMPRESSED_BITSTREAM: &[u8] =
     include_bytes!(env!("GIMLET_FPGA_IMAGE_PATH"));
 
 cfg_if::cfg_if! {
-    if #[cfg(any(target_board = "gimlet-a", target_board = "gimlet-b"))] {
-        const SEQ_SPI_DEVICE: u8 = 0;
-        const ICE40_SPI_DEVICE: u8 = 1;
+    if #[cfg(any(
+        target_board = "gimlet-b",
+        target_board = "gimlet-c",
+        target_board = "gimlet-d",
+        target_board = "gimlet-e",
+    ))] {
+        const A0_TIMEOUT_MILLIS: u64 = 2000;
 
         const ICE40_CONFIG: ice40::Config = ice40::Config {
             // CRESET net is SEQ_TO_SP_CRESET_L and hits PD5.
@@ -618,19 +1085,8 @@ cfg_if::cfg_if! {
             sys_api::Port::A.pin(6)
         );
 
-        // gimlet-a needs to have a pin flipped to mux the iCE40 SPI flash out
-        // of circuit to be able to program the FPGA, because we accidentally
-        // share a CS net between Flash and the iCE40.
-        //
-        // (port, mask, high_flag)
-        #[cfg(target_board = "gimlet-a")]
-        const FPGA_HACK_PINS: Option<&[(sys_api::PinSet, bool)]> = Some(&[
-            // SEQ_TO_SEQ_MUX_SEL, pulled high, we drive it low
-            (sys_api::Port::I.pin(8), false),
-        ]);
-
-        #[cfg(target_board = "gimlet-b")]
-        const FPGA_HACK_PINS: Option<&[(sys_api::PinSet, bool)]> = None;
+        const SP_TO_SP3_NMI_SYNC_FLOOD_L: sys_api::PinSet =
+            sys_api::Port::J.pin(2);
 
         //
         // SP_TO_SP3_UARTA_OE_L must be driven low to allow for transmission
@@ -646,10 +1102,9 @@ cfg_if::cfg_if! {
                 sys_api::OutputType::PushPull,
                 sys_api::Speed::Low,
                 sys_api::Pull::None,
-            )
-            .unwrap();
+            );
 
-            sys.gpio_reset(UART_TX_ENABLE).unwrap();
+            sys.gpio_reset(UART_TX_ENABLE);
         }
 
         fn uart_sp_to_sp3_disable() {
@@ -660,10 +1115,9 @@ cfg_if::cfg_if! {
                 sys_api::OutputType::PushPull,
                 sys_api::Speed::Low,
                 sys_api::Pull::None,
-            )
-            .unwrap();
+            );
 
-            sys.gpio_set(UART_TX_ENABLE).unwrap();
+            sys.gpio_set(UART_TX_ENABLE);
         }
         const ENABLES_PORT: sys_api::Port = sys_api::Port::A;
         const ENABLE_V1P2_MASK: u16 = 1 << 15;
@@ -695,6 +1149,8 @@ cfg_if::cfg_if! {
 
         // SP_STATUS_LED
         const CHASSIS_LED: sys_api::PinSet = sys_api::Port::A.pin(3);
+        // SP_TO_IGNIT_FAULT_L
+        const FAULT_PIN_L: sys_api::PinSet = sys_api::Port::A.pin(15);
 
         // Gimlet provides external pullups.
         const PGS_PULL: sys_api::Pull = sys_api::Pull::None;
@@ -703,6 +1159,18 @@ cfg_if::cfg_if! {
 
         // Externally pulled to V3P3_SYS_A0
         const NIC_PWREN_L_PULL: sys_api::Pull = sys_api::Pull::None;
+
+        // Pins related to core type and presence
+        const CORETYPE: sys_api::PinSet = sys_api::Port::I.pin(5);
+        const CPU_PRESENT_L: sys_api::PinSet = sys_api::Port::C.pin(13);
+        const SP3R1: sys_api::PinSet = sys_api::Port::I.pin(4);
+        const SP3R2: sys_api::PinSet = sys_api::Port::H.pin(13);
+
+        // All of these are externally pulled to V3P3_SP3_VDD_33_S5_A1
+        const CORETYPE_PULL: sys_api::Pull = sys_api::Pull::None;
+        const CPU_PRESENT_L_PULL: sys_api::Pull = sys_api::Pull::None;
+        const SP3R1_PULL: sys_api::Pull = sys_api::Pull::None;
+        const SP3R2_PULL: sys_api::Pull = sys_api::Pull::None;
 
         fn vcore_soc_off() {
             use drv_i2c_devices::raa229618::Raa229618;
@@ -714,8 +1182,8 @@ cfg_if::cfg_if! {
             let (device, rail) = i2c_config::pmbus::vddcr_soc(i2c);
             let mut vddcr_soc = Raa229618::new(&device, rail);
 
-            vdd_vcore.turn_off().unwrap();
-            vddcr_soc.turn_off().unwrap();
+            vdd_vcore.turn_off().unwrap_lite();
+            vddcr_soc.turn_off().unwrap_lite();
         }
 
         fn vcore_soc_on() {
@@ -728,8 +1196,32 @@ cfg_if::cfg_if! {
             let (device, rail) = i2c_config::pmbus::vddcr_soc(i2c);
             let mut vddcr_soc = Raa229618::new(&device, rail);
 
-            vdd_vcore.turn_on().unwrap();
-            vddcr_soc.turn_on().unwrap();
+            vdd_vcore.turn_on().unwrap_lite();
+            vddcr_soc.turn_on().unwrap_lite();
+        }
+
+        //
+        // We have had issues whereby V3P3_SYS_A0 is inadvertently driven by a
+        // pin on the SP (e.g., a pin that is pulled up to V3P3_SYS_A0 being
+        // configured as a push/pull GPIO rather than open drain).  The side
+        // effects of this are nasty from the SP3 side, so to help debug any
+        // such inadvertent driving, we record the Vout of V3P3_SYS_A0 after
+        // arriving in A2 and then before starting any state transition; this
+        // convenience routine makes these recordings easy to sprinkle as
+        // needed.
+        //
+        fn ringbuf_entry_v3p3_sys_a0_vout() {
+            use drv_i2c_devices::tps546b24a::Tps546B24A;
+            use drv_i2c_devices::VoltageSensor;
+
+            let i2c = I2C.get_task_id();
+
+            let (device, rail) = i2c_config::pmbus::v3p3_sys_a0(i2c);
+            let v3p3_sys_a0 = Tps546B24A::new(&device, rail);
+
+            ringbuf_entry!(
+                Trace::V3P3SysA0VOut(v3p3_sys_a0.read_vout().unwrap_lite())
+            );
         }
     } else {
         compile_error!("unsupported target board");
@@ -737,7 +1229,8 @@ cfg_if::cfg_if! {
 }
 
 mod idl {
-    use super::{PowerState, SeqError};
+    use super::SeqError;
 
     include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
 }
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

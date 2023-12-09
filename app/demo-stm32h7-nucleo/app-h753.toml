@@ -6,26 +6,18 @@ stacksize = 896
 
 [kernel]
 name = "demo-stm32h7-nucleo"
-requires = {flash = 22000, ram = 5120}
-#
-# For the kernel (and for any task that logs), we are required to enable
-# either "itm" (denoting logging/panicking via ARM's Instrumentation Trace
-# Macrocell) or "semihosting" (denoting logging/panicking via ARM
-# semihosting).  We are biased to ITM because semihosting is excruciatingly
-# slow (it is breakpoint based) and has an undesirable failure mode if logging
-# output is generated and debugger is not attached (namely, the target stops).
-# If one does choose to change this to semihosting for purposes of
-# development, be sure to also change it in every task of interest.
-#
-features = ["h753", "itm"]
+requires = {flash = 24000, ram = 5120}
+features = ["h753", "dump"]
 
 [tasks.jefe]
 name = "task-jefe"
 priority = 0
-max-sizes = {flash = 8192, ram = 2048}
+max-sizes = {flash = 16384, ram = 2048}
 start = true
-features = ["itm"]
+features = ["dump"]
 stacksize = 1536
+notifications = ["fault", "timer"]
+extern-regions = [ "sram2", "sram3", "sram4" ]
 
 [tasks.jefe.config.allowed-callers]
 set_reset_reason = ["sys"]
@@ -36,7 +28,7 @@ name = "drv-stm32xx-sys"
 features = ["h753"]
 priority = 1
 max-sizes = {flash = 2048, ram = 1024}
-uses = ["rcc", "gpios1", "gpios2", "gpios3"]
+uses = ["rcc", "gpios1", "gpios2", "gpios3", "system_flash"]
 start = true
 task-slots = ["jefe"]
 
@@ -44,28 +36,41 @@ task-slots = ["jefe"]
 name = "drv-stm32xx-i2c-server"
 features = ["h753"]
 priority = 2
-max-sizes = {flash = 16384, ram = 2048}
+max-sizes = {flash = 16384, ram = 4096}
 uses = ["i2c1", "i2c2", "i2c3", "i2c4"]
+notifications = ["i2c1-irq", "i2c2-irq", "i2c3-irq", "i2c4-irq"]
 start = true
 task-slots = ["sys"]
 
 [tasks.i2c_driver.interrupts]
-"i2c2.event" = 0b0000_0010
-"i2c2.error" = 0b0000_0010
+"i2c1.event" = "i2c1-irq"
+"i2c1.error" = "i2c1-irq"
+"i2c2.event" = "i2c2-irq"
+"i2c2.error" = "i2c2-irq"
+"i2c3.event" = "i2c3-irq"
+"i2c3.error" = "i2c3-irq"
+"i2c4.event" = "i2c4-irq"
+"i2c4.error" = "i2c4-irq"
+
+[tasks.packrat]
+name = "task-packrat"
+priority = 2
+max-sizes = {flash = 8192, ram = 2048}
+start = true
+# task-slots is explicitly empty: packrat should not send IPCs!
+task-slots = []
 
 [tasks.spi_driver]
 name = "drv-stm32h7-spi-server"
 priority = 2
-max-sizes = {flash = 16384, ram = 2048}
+max-sizes = {flash = 16384, ram = 4096}
 features = ["spi1", "h753"]
 uses = ["spi1"]
 start = true
-interrupts = {"spi1.irq" = 1}
+notifications = ["spi-irq"]
+interrupts = {"spi1.irq" = "spi-irq"}
 stacksize = 880
 task-slots = ["sys"]
-
-[tasks.spi_driver.config.spi]
-global_config = "spi1"
 
 [tasks.net]
 name = "task-net"
@@ -74,10 +79,11 @@ priority = 2
 max-sizes = {flash = 131072, ram = 16384, sram1 = 32768}
 features = ["h753"]
 sections = {eth_bulk = "sram1"}
-uses = ["eth", "eth_dma", "system_flash", "tim16"]
+uses = ["eth", "eth_dma", "tim16"]
 start = true
-interrupts = {"eth.irq" = 0b1, "tim16.irq" = 0b10}
-task-slots = ["sys"]
+notifications = ["eth-irq", "mdio-timer-irq", "wake-timer"]
+interrupts = {"eth.irq" = "eth-irq", "tim16.irq" = "mdio-timer-irq"}
+task-slots = ["sys", "jefe"]
 
 [tasks.user_leds]
 name = "drv-user-leds"
@@ -86,6 +92,7 @@ priority = 2
 max-sizes = {flash = 2048, ram = 1024}
 start = true
 task-slots = ["sys"]
+notifications = ["timer"]
 
 [tasks.ping]
 name = "task-ping"
@@ -101,6 +108,7 @@ priority = 3
 max-sizes = {flash = 1024, ram = 1024}
 start = true
 task-slots = ["user_leds"]
+notifications = ["timer"]
 
 [tasks.udpecho]
 name = "task-udpecho"
@@ -109,6 +117,7 @@ max-sizes = {flash = 32768, ram = 8192}
 stacksize = 4096
 start = true
 task-slots = ["net"]
+notifications = ["socket"]
 
 [tasks.udpbroadcast]
 name = "task-udpbroadcast"
@@ -116,7 +125,8 @@ priority = 3
 max-sizes = {flash = 16384, ram = 8192}
 stacksize = 4096
 start = true
-task-slots = ["net"]
+task-slots = ["net", "packrat"]
+notifications = ["socket"]
 
 [tasks.udprpc]
 name = "task-udprpc"
@@ -125,10 +135,11 @@ max-sizes = {flash = 32768, ram = 8192}
 stacksize = 4096
 start = true
 task-slots = ["net"]
+notifications = ["socket"]
 
 [tasks.hiffy]
 name = "task-hiffy"
-features = ["h753", "stm32h7", "itm", "i2c", "gpio", "spi", "qspi", "hash"]
+features = ["h753", "stm32h7", "i2c", "gpio", "spi", "qspi", "hash"]
 priority = 5
 max-sizes = {flash = 32768, ram = 32768 }
 stacksize = 2048
@@ -143,7 +154,8 @@ max-sizes = {flash = 16384, ram = 4096 }
 stacksize = 2048
 start = true
 uses = ["quadspi"]
-interrupts = {"quadspi.irq" = 1}
+notifications = ["qspi-irq"]
+interrupts = {"quadspi.irq" = "qspi-irq"}
 task-slots = ["sys", "hash_driver"]
 
 [tasks.hash_driver]
@@ -154,7 +166,8 @@ max-sizes = {flash = 16384, ram=4096 }
 stacksize = 2048
 start = true
 uses = ["hash"]
-interrupts = {"hash.irq" = 1}
+notifications = ["hash-irq"]
+interrupts = {"hash.irq" = "hash-irq"}
 task-slots = ["sys"]
 
 [tasks.idle]
@@ -174,12 +187,23 @@ start = true
 task-slots = ["sys", "user_leds"]
 uses = ["rng"]
 
+[tasks.dump_agent]
+name = "task-dump-agent"
+features = ["no-rot"]
+priority = 4
+max-sizes = {flash = 32768, ram = 2048 }
+start = true
+task-slots = ["jefe"]
+stacksize = 1200
+extern-regions = [ "sram2", "sram3", "sram4" ]
+
 [config]
 [[config.i2c.controllers]]
 controller = 2
 
-[[config.i2c.controllers.ports.F.pins]]
-pins = [ 0, 1 ]
+[config.i2c.controllers.ports.F]
+scl.pin = 1
+sda.pin = 0
 af = 4
 
 #
@@ -188,7 +212,6 @@ af = 4
 # [[config.i2c.controllers.ports.F.muxes]]
 # driver = "ltc4306"
 # address = 0b1001_010
-
 
 [config.spi.spi1]
 controller = 1
@@ -206,24 +229,25 @@ cs = [{port = "D", pin = 14}]
 clock_divider = "DIV32"
 
 [config.net]
+# UDP ports in sockets below are assigned in oxidecomputer/oana
 
 [config.net.sockets.echo]
 kind = "udp"
-owner = {name = "udpecho", notification = 1}
+owner = {name = "udpecho", notification = "socket"}
 port = 7
 tx = { packets = 3, bytes = 1024 }
 rx = { packets = 3, bytes = 1024 }
 
 [config.net.sockets.broadcast]
 kind = "udp"
-owner = {name = "udpbroadcast", notification = 1}
+owner = {name = "udpbroadcast", notification = "socket"}
 port = 997
 tx = { packets = 3, bytes = 1024 }
 rx = { packets = 3, bytes = 1024 }
 
 [config.net.sockets.rpc]
 kind = "udp"
-owner = {name = "udprpc", notification = 1}
+owner = {name = "udprpc", notification = "socket"}
 port = 998
 tx = { packets = 3, bytes = 1024 }
 rx = { packets = 3, bytes = 1024 }

@@ -1,0 +1,132 @@
+// Ignition Server IPC interface
+
+Interface(
+    name: "Ignition",
+    ops: {
+        "port_count": (
+            doc: "Return the number of ports in the system",
+            args: {},
+            reply: Result(
+                ok: "u8",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "presence_summary": (
+            doc: "A bit vector indicating whether or not a Target is present on the given port",
+            args: {},
+            reply: Result(
+                ok: "u64",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "port_state": (
+            doc: "Return the state for the given controller port",
+            args: {
+                "port": "u8",
+            },
+            reply: Result(
+                ok: "drv_ignition_api::PortState",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "always_transmit": (
+            doc: "Return the whether or not the Controller port will transmit even if no Target present",
+            args: {
+                "port": "u8",
+            },
+            reply: Result(
+                ok: "bool",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "set_always_transmit": (
+            doc: "Set whether or not the Controller port will transmit even if no Target present",
+            args: {
+                "port": "u8",
+                "enabled": "bool",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "counters": (
+            doc: "Return the counters for the given controller port",
+            args: {
+                "port": "u8",
+            },
+            reply: Result(
+                ok: "drv_ignition_api::Counters",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "transceiver_events": (
+            doc: "Return the transceiver events for the given controller port and transceiver",
+            args: {
+                "port": "u8",
+                "txr": (
+                    type: "drv_ignition_api::TransceiverSelect",
+                    recv: FromPrimitive("u8"),
+                ),
+            },
+            reply: Result(
+                ok: "u8",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "clear_transceiver_events": (
+            doc: "Clear the link events for the given controller port and transceiver",
+            args: {
+                "port": "u8",
+                "txr": (
+                    type: "drv_ignition_api::TransceiverSelect",
+                    recv: FromPrimitive("u8"),
+                ),
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+         "link_events": (
+            doc: "Return all transceiver events for the given port",
+            args: {
+                "port": "u8",
+            },
+            reply: Result(
+                ok: "[u8; 3]",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "send_request": (
+            doc: "Send a request to the Target for the given controller port",
+            args: {
+                "port": "u8",
+                "request": (
+                    type: "drv_ignition_api::Request",
+                    recv: FromPrimitive("u8"),
+                )
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "all_port_state": (
+            doc: "Return the state for the given controller ports as indicated by the ports bit vector",
+            args: {},
+            reply: Result(
+                ok: "[drv_ignition_api::PortState; 40]",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+        "all_link_events": (
+            doc: "Return the transceiver events for all ports",
+            args: {},
+            reply: Result(
+                ok: "[[u8; 3]; 40]",
+                err: CLike("drv_ignition_api::IgnitionError"),
+            ),
+        ),
+    }
+)

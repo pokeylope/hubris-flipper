@@ -1,0 +1,15 @@
+[package]
+name = "lpc55-puf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lpc55-pac = { workspace = true }
+num-derive = { workspace = true }
+num-traits = { workspace = true }
+unwrap-lite = { path = "../unwrap-lite" }
+
+[lib]
+test = false
+doctest = false
+bench = false

@@ -31,10 +31,11 @@ impl idl::InOrderValidateImpl for ServerImpl {
     fn validate_i2c(
         &mut self,
         _: &RecvMessage,
-        index: usize,
+        index: u32,
     ) -> Result<ValidateOk, RequestError<ValidateError>> {
         use i2c_config::validation::I2cValidation;
 
+        let index = index as usize;
         ringbuf_entry!(Trace::Validate(index));
 
         match i2c_config::validation::validate(I2C.get_task_id(), index) {
