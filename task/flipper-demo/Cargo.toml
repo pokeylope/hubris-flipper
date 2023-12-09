@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-userlib = {path = "../../sys/userlib", features = ["panic-messages"]}
+userlib = { path = "../../sys/userlib", features = ["panic-messages"] }
 drv-display-api = { path = "../../drv/display-api" }
-embedded-graphics = "0.7.1"
+embedded-graphics = { workspace = true }
 
 # This section is here to discourage RLS/rust-analyzer from doing test builds,
 # since test builds don't work for cross compilation.

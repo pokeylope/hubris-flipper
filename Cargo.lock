@@ -466,15 +466,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cortex-m-semihosting"
-version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bffa6c1454368a6aa4811ae60964c38e6996d397ff8095a8b9211b1c1f749bc"
-dependencies = [
- "cortex-m",
-]
-
-[[package]]
 name = "cpufeatures"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -834,11 +825,12 @@ name = "drv-flipper-input"
 version = "0.1.0"
 dependencies = [
  "build-i2c",
+ "build-util",
  "drv-i2c-api",
  "drv-i2c-devices",
  "drv-stm32xx-sys-api",
  "idol",
- "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
+ "stm32wb",
  "userlib",
 ]
 
@@ -1899,7 +1891,7 @@ version = "0.1.0"
 dependencies = [
  "num-traits",
  "ringbuf",
- "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
+ "stm32wb",
  "vcell",
  "zerocopy",
 ]
@@ -1923,7 +1915,7 @@ dependencies = [
  "quote",
  "ringbuf",
  "serde",
- "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
+ "stm32wb",
  "syn 1.0.94",
  "userlib",
  "zerocopy",
@@ -1937,7 +1929,7 @@ dependencies = [
  "num-traits",
  "stm32g0",
  "stm32h7",
- "stm32wb 0.15.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "stm32wb",
  "userlib",
  "zerocopy",
 ]
@@ -1955,7 +1947,7 @@ dependencies = [
  "ringbuf",
  "stm32g0",
  "stm32h7",
- "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
+ "stm32wb",
  "userlib",
  "zerocopy",
 ]
@@ -1977,7 +1969,7 @@ dependencies = [
  "ringbuf",
  "stm32g0",
  "stm32h7",
- "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
+ "stm32wb",
  "userlib",
 ]
 
@@ -1995,7 +1987,7 @@ dependencies = [
  "num-traits",
  "stm32g0",
  "stm32h7",
- "stm32wb 0.15.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "stm32wb",
  "task-jefe-api",
  "userlib",
  "zerocopy",
@@ -2113,7 +2105,6 @@ name = "drv-user-leds-api"
 version = "0.1.0"
 dependencies = [
  "derive-idol-err",
- "embedded-graphics",
  "idol",
  "num-traits",
  "userlib",
@@ -2315,10 +2306,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "kern",
- "panic-halt",
- "panic-itm",
- "panic-semihosting",
- "stm32wb 0.15.1 (git+https://github.com/pokeylope/stm32wb)",
+ "stm32wb",
 ]
 
 [[package]]
@@ -3230,31 +3218,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "panic-halt"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de96540e0ebde571dc55c73d60ef407c653844e6f9a1e2fdbd40c07b9252d812"
-
-[[package]]
-name = "panic-itm"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d577d97d1b31268087b6dddf2470e6794ef5eee87d9dca7fcd0481695391a4c"
-dependencies = [
- "cortex-m",
-]
-
-[[package]]
-name = "panic-semihosting"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3d55dedd501dfd02514646e0af4d7016ce36bc12ae177ef52056989966a1eec"
-dependencies = [
- "cortex-m",
- "cortex-m-semihosting",
-]
-
-[[package]]
 name = "paste"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4101,17 +4064,6 @@ dependencies = [
  "stm32h7",
  "userlib",
  "zerocopy",
-]
-
-[[package]]
-name = "stm32wb"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "caf2c1ec978d021e79cd2065efadc49a231779ec22647f92cdcb9cbf83b0e62d"
-dependencies = [
- "bare-metal 1.0.0",
- "cortex-m",
- "vcell",
 ]
 
 [[package]]

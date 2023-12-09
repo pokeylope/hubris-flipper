@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-drv-spi-api = {path = "../../drv/spi-api"}
-embedded-graphics = "0.7.1"
-userlib = {path = "../../sys/userlib"}
+drv-spi-api = { path = "../../drv/spi-api" }
+embedded-graphics = { workspace = true }
+userlib = { path = "../../sys/userlib" }
 
 # This section is here to discourage RLS/rust-analyzer from doing test builds,
 # since test builds don't work for cross compilation.

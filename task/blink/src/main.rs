@@ -28,18 +28,16 @@ pub fn main() -> ! {
         OutputType::PushPull,
         Speed::Low,
         Pull::None,
-    )
-    .unwrap();
+    );
 
-    sys.gpio_configure_input(BACK_BUTTON, Pull::None).unwrap();
+    sys.gpio_configure_input(BACK_BUTTON, Pull::None);
 
     sys.gpio_configure_output(
         PERIPH_POWER,
         OutputType::OpenDrain,
         Speed::Low,
         Pull::None,
-    )
-    .unwrap();
+    );
 
     let i2c_task = I2C.get_task_id();
     //let lp5562 = Lp5562::new(&i2c_config::devices::lp5562(i2c_task)[0]);
@@ -50,7 +48,7 @@ pub fn main() -> ! {
     let mut button_held = false;
 
     let mut check_button = || {
-        if sys.gpio_read(BACK_BUTTON).unwrap() == 0 {
+        if sys.gpio_read(BACK_BUTTON) == 0 {
             if button_held {
                 power_off(&sys, &bq25896);
             } else {
@@ -63,12 +61,12 @@ pub fn main() -> ! {
 
     loop {
         check_button();
-        sys.gpio_set(OUT_PIN).unwrap();
+        sys.gpio_set(OUT_PIN);
         //lp5562.set_color(255, 0, 0).unwrap();
         hl::sleep_for(INTERVAL);
 
         check_button();
-        sys.gpio_reset(OUT_PIN).unwrap();
+        sys.gpio_reset(OUT_PIN);
         //lp5562.set_color(0, 0, 255).unwrap();
         hl::sleep_for(INTERVAL);
     }

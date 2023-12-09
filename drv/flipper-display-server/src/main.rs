@@ -6,7 +6,7 @@
 #![no_main]
 
 use drv_display_api::*;
-use drv_spi_api::Spi;
+use drv_spi_api::{Spi, SpiServer};
 use drv_stm32xx_sys_api::*;
 use idol_runtime::{Leased, RequestError, R, LenLimit};
 use st7565r::{Mode, St7565r};
@@ -29,21 +29,19 @@ fn main() -> ! {
         OutputType::PushPull,
         Speed::Low,
         Pull::None,
-    )
-    .unwrap();
+    );
     sys.gpio_configure_output(
         DISPLAY_DI,
         OutputType::PushPull,
         Speed::Low,
         Pull::None,
-    )
-    .unwrap();
-    sys.gpio_set(DISPLAY_RST_N).unwrap();
+    );
+    sys.gpio_set(DISPLAY_RST_N);
 
     let spi = Spi::from(SPI.get_task_id()).device(0);
     let toggle_di = |mode| match mode {
-        Mode::Command => sys.gpio_reset(DISPLAY_DI).unwrap(),
-        Mode::Data => sys.gpio_set(DISPLAY_DI).unwrap(),
+        Mode::Command => sys.gpio_reset(DISPLAY_DI),
+        Mode::Data => sys.gpio_set(DISPLAY_DI),
     };
     let mut st7565r = St7565r::new(spi, toggle_di);
     st7565r.initialize().unwrap();
@@ -55,15 +53,17 @@ fn main() -> ! {
     }
 }
 
-struct DisplayServer<F>
+struct DisplayServer<S, F>
 where
+    S: SpiServer,
     F: Fn(Mode),
 {
-    st7565r: St7565r<F>,
+    st7565r: St7565r<S, F>,
 }
 
-impl<F> InOrderDisplayImpl for DisplayServer<F>
+impl<S, F> InOrderDisplayImpl for DisplayServer<S, F>
 where
+    S: SpiServer,
     F: Fn(Mode),
 {
     fn draw_pixels(

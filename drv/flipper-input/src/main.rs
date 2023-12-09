@@ -21,7 +21,7 @@ struct Button {
 
 impl Button {
     fn is_pushed(&self, sys: &Sys) -> bool {
-        (sys.gpio_read(self.pinset).unwrap() != 0) != self.invert
+        (sys.gpio_read(self.pinset) != 0) != self.invert
     }
 }
 
@@ -45,11 +45,6 @@ include!(concat!(env!("OUT_DIR"), "/i2c_config.rs"));
 task_slot!(I2C, i2c_driver);
 task_slot!(SYS, sys);
 
-const EXTI3: u32 = 1 << 0;
-const EXTI9_5: u32 = 1 << 1;
-const EXTI15_10: u32 = 1 << 2;
-const TIMER_EXPIRED: u32 = 1 << 3;
-
 const OUT_PIN: PinSet = Port::A.pin(6);
 
 #[export_name = "main"]
@@ -61,15 +56,14 @@ fn main() -> ! {
         OutputType::PushPull,
         Speed::Low,
         Pull::None,
-    )
-    .unwrap();
+    );
 
     let p = device::Peripherals::take().unwrap();
     let syscfg = p.SYSCFG;
     let exti = p.EXTI;
 
     for button in &BUTTONS {
-        sys.gpio_configure_input(button.pinset, Pull::Up).unwrap();
+        sys.gpio_configure_input(button.pinset, Pull::Up);
         configure_exti(&syscfg, &exti, button.pinset.port, get_pin(button.pinset).unwrap());
     }
 
@@ -79,23 +73,24 @@ fn main() -> ! {
     lp5562.set_color(255, 0, 0).unwrap();
     lp5562.enable_backlight().unwrap();
 
-    sys_irq_control(EXTI3, true);
-    sys_irq_control(EXTI9_5, true);
-    sys_irq_control(EXTI15_10, true);
-    sys_set_timer(Some(sys_get_timer().now + BACKLIGHT_DURATION), TIMER_EXPIRED);
+    sys_irq_control(notifications::EXTI_EXTI3_IRQ_MASK, true);
+    sys_irq_control(notifications::EXTI_EXTI9_5_IRQ_MASK, true);
+    sys_irq_control(notifications::EXTI_EXTI15_10_IRQ_MASK, true);
+    sys_set_timer(Some(sys_get_timer().now + BACKLIGHT_DURATION), notifications::TIMER_MASK);
+    let notification_mask = notifications::EXTI_EXTI3_IRQ_MASK | notifications::EXTI_EXTI9_5_IRQ_MASK | notifications::EXTI_EXTI15_10_IRQ_MASK | notifications::TIMER_MASK;
     loop {
-        let result = sys_recv_closed(&mut [], EXTI3 | EXTI9_5 | EXTI15_10 | TIMER_EXPIRED, TaskId::KERNEL).unwrap();
+        let result = sys_recv_closed(&mut [], notification_mask, TaskId::KERNEL).unwrap();
         match result.operation {
-            TIMER_EXPIRED => lp5562.disable_backlight().unwrap(),
+            notifications::TIMER_MASK => lp5562.disable_backlight().unwrap(),
             _ => {
                 if let Some(button) = BUTTONS.iter().find(|b| b.is_pushed(&sys)) {
                     lp5562.enable_backlight().unwrap();
-                    sys_set_timer(Some(sys_get_timer().now + BACKLIGHT_DURATION), TIMER_EXPIRED);
-                    sys.gpio_set(OUT_PIN).unwrap();
+                    sys_set_timer(Some(sys_get_timer().now + BACKLIGHT_DURATION), notifications::TIMER_MASK);
+                    sys.gpio_set(OUT_PIN);
                     let (r, g, b) = button.color;
                     lp5562.set_color(r, g, b).unwrap();
                 } else {
-                    sys.gpio_reset(OUT_PIN).unwrap();
+                    sys.gpio_reset(OUT_PIN);
                     lp5562.set_color(255, 0, 0).unwrap();
                 }
                 exti.pr1.write(|w| unsafe { w.bits(0xffffffff) });
@@ -145,3 +140,5 @@ fn configure_exti(
     exti.ftsr1
         .modify(|r, w| unsafe { w.bits(r.bits() | 1 << pin) });
 }
+
+include!(concat!(env!("OUT_DIR"), "/notifications.rs"));

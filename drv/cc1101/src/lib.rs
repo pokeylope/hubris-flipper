@@ -4,7 +4,7 @@
 
 #![no_std]
 
-use drv_spi_api::{SpiDevice, SpiError};
+use drv_spi_api::{SpiDevice, SpiError, SpiServer};
 
 const CC1101_QUARTZ: u64 = 26000000;
 const CC1101_FMASK: u64 = 0xFFFFFF;
@@ -185,12 +185,12 @@ impl From<SpiError> for Cc1101Error {
     }
 }
 
-pub struct Cc1101 {
-    spi: SpiDevice,
+pub struct Cc1101<S: SpiServer> {
+    spi: SpiDevice<S>,
 }
 
-impl Cc1101 {
-    pub fn new(spi: SpiDevice) -> Self {
+impl<S: SpiServer> Cc1101<S> {
+    pub fn new(spi: SpiDevice<S>) -> Self {
         Self { spi }
     }
 

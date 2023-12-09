@@ -11,7 +11,7 @@
 // The UID address is in System (flash) Memory, rather than in a peripheral,
 // so it's not documented in the SVD or `stm32` crate.
 cfg_if::cfg_if! {
-    if #[cfg(feature = "family-stm32g0")] {
+    if #[cfg(any(feature = "family-stm32g0", feature = "family-stm32wb"))] {
         const UID_ADDR: u32 = 0x1FFF_7590;
     } else if #[cfg(feature = "family-stm32h7")] {
         const UID_ADDR: u32 = 0x1FF1_E800;

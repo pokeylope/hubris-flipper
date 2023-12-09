@@ -5,7 +5,7 @@
 #![no_std]
 
 use core::cell::Cell;
-use drv_spi_api::{SpiDevice, SpiError};
+use drv_spi_api::{SpiDevice, SpiError, SpiServer};
 use embedded_graphics::{
     mono_font::{ascii::FONT_9X18, MonoTextStyle},
     pixelcolor::BinaryColor,
@@ -50,21 +50,23 @@ pub enum Mode {
     Data,
 }
 
-pub struct St7565r<F>
+pub struct St7565r<S, F>
 where
+    S: SpiServer,
     F: Fn(Mode),
 {
-    spi: SpiDevice,
+    spi: SpiDevice<S>,
     mode: Cell<Mode>,
     toggle_di: F,
     pub display: St7565rDisplay,
 }
 
-impl<F> St7565r<F>
+impl<S, F> St7565r<S, F>
 where
+    S: SpiServer,
     F: Fn(Mode),
 {
-    pub fn new(spi: SpiDevice, toggle_di: F) -> Self {
+    pub fn new(spi: SpiDevice<S>, toggle_di: F) -> Self {
         toggle_di(Mode::Command);
         Self {
             spi,

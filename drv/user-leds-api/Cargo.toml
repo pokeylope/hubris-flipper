@@ -9,7 +9,6 @@ zerocopy = { workspace = true }
 
 derive-idol-err = { path = "../../lib/derive-idol-err" }
 userlib = { path = "../../sys/userlib" }
-embedded-graphics = "0.7.1"
 
 # This section is here to discourage RLS/rust-analyzer from doing test builds,
 # since test builds don't work for cross compilation.

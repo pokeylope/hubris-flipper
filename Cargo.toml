@@ -52,6 +52,7 @@ ctrlc = { version = "3.1.5", default-features = false }
 derive_more = { version = "0.99", default-features = false, features = ["from", "into"] }
 digest = { version = "0.10", default-features = false }
 dunce = { version = "1.0.2", default-features = false }
+embedded-graphics = { version = "0.7.1", default-features = false }
 embedded-hal = { version = "0.2", default-features = false }
 enum-kinds = { version = "0.5.1", default-features = false, features = ["no-stdlib"] }
 enum-map = { version = "2.4.1", default-features = false }
@@ -102,6 +103,7 @@ stm32f3 = { version = "0.13.0", default-features = false }
 stm32f4 = { version = "0.13.0", default-features = false }
 stm32h7 = { version = "0.14", default-features = false }
 stm32g0 = { version = "0.15.1", default-features = false }
+stm32wb = { version = "0.15.1", default-features = false, git = "https://github.com/pokeylope/stm32wb" }
 strsim = { version = "0.10.0", default-features = false }
 syn = { version = "1", default-features = false, features = ["derive", "parsing", "proc-macro", "extra-traits"] }
 toml = { version = "0.7", default-features = false, features = ["parse", "display"] }

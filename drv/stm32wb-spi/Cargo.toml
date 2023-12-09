@@ -1,14 +1,14 @@
 [package]
 name = "drv-stm32wb-spi"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-ringbuf = {path = "../../lib/ringbuf"}
-zerocopy = "0.6.1"
-num-traits = { version = "0.2.12", default-features = false }
-vcell = "0.1.2"
-stm32wb = { version = "0.15.1", default-features = false, git = "https://github.com/pokeylope/stm32wb" }
+ringbuf = { path = "../../lib/ringbuf" }
+zerocopy = { workspace = true }
+num-traits = { workspace = true }
+vcell = { workspace = true }
+stm32wb = { workspace = true }
 
 [features]
 wb55 = ["stm32wb/stm32wb55"]

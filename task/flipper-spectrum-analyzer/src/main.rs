@@ -109,7 +109,7 @@ fn main() -> ! {
     }
 }
 
-fn get_rssi(cc1101: &Cc1101, freq: u32) -> Result<f32, Cc1101Error> {
+fn get_rssi<S: SpiServer>(cc1101: &Cc1101<S>, freq: u32) -> Result<f32, Cc1101Error> {
     cc1101.set_frequency(freq)?;
     cc1101.switch_to_rx(true)?;
     //hl::sleep_for(1);

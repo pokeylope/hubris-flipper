@@ -1,21 +1,21 @@
 [package]
 name = "drv-flipper-display-server"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-userlib = {path = "../../sys/userlib", features = ["panic-messages"]}
+userlib = { path = "../../sys/userlib", features = ["panic-messages"] }
 drv-spi-api = { path = "../../drv/spi-api" }
-drv-stm32xx-sys-api = {path = "../../drv/stm32xx-sys-api", features = ["family-stm32wb"]}
+drv-stm32xx-sys-api = { path = "../../drv/stm32xx-sys-api", features = ["family-stm32wb"] }
 drv-display-api = { path = "../../drv/display-api" }
 st7565r = { path = "../../drv/st7565r" }
-num-traits = { version = "0.2.12", default-features = false }
-zerocopy = "0.6.1"
-idol-runtime = {git = "https://github.com/oxidecomputer/idolatry.git"}
-embedded-graphics = "0.7.1"
+num-traits = { workspace = true }
+zerocopy = { workspace = true }
+idol-runtime = { workspace = true }
+embedded-graphics = { workspace = true }
 
 [build-dependencies]
-idol = {git = "https://github.com/oxidecomputer/idolatry.git"}
+idol = { workspace = true }
 
 # This section is here to discourage RLS/rust-analyzer from doing test builds,
 # since test builds don't work for cross compilation.

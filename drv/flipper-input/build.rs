@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    build_util::build_notifications()?;
     build_i2c::codegen(build_i2c::Disposition::Devices)?;
     Ok(())
 }

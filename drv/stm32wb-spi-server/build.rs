@@ -9,8 +9,9 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::io::Write;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     build_util::expose_target_board();
+    build_util::build_notifications()?;
 
     let task_config = build_util::task_config::<TaskConfig>()?;
     let global_config = build_util::config::<GlobalConfig>()?;
@@ -159,7 +160,7 @@ impl Default for ClockDivider {
 fn generate_spi_config(
     config: &BTreeMap<String, SpiConfig>,
     task_config: &SpiTaskConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = config.get(&task_config.global_config).ok_or_else(|| {
         format!(
             "reference to undefined spi config {}",
@@ -321,7 +322,7 @@ impl ToTokens for Af {
 fn check_spi_config(
     config: &BTreeMap<String, SpiConfig>,
     task_config: &SpiTaskConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // We only want to look at the subset of global configuration relevant to
     // this task, so that error reporting is more focused.
     let config = config.get(&task_config.global_config).ok_or_else(|| {
@@ -365,7 +366,7 @@ fn check_spi_config(
 
 fn check_afpinset(
     config: &AfPinSetConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for &pin in &config.pins {
         if pin > 15 {
             return Err(format!(
@@ -385,7 +386,7 @@ fn check_afpinset(
     Ok(())
 }
 
-fn check_afpin(config: &AfPinConfig) -> Result<(), Box<dyn std::error::Error>> {
+fn check_afpin(config: &AfPinConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     check_gpiopin(&config.pc)?;
     if config.af.0 > 15 {
         return Err(format!(
@@ -399,7 +400,7 @@ fn check_afpin(config: &AfPinConfig) -> Result<(), Box<dyn std::error::Error>> {
 
 fn check_gpiopin(
     config: &GpioPinConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if config.pin > 15 {
         return Err(format!(
             "pin {:?}{} is invalid, pins are numbered 0-15",

@@ -7,25 +7,14 @@ stacksize = 896
 [kernel]
 name = "flipper-zero"
 requires = {flash = 20000, ram = 3136}
-#
-# For the kernel (and for any task that logs), we are required to enable
-# either "itm" (denoting logging/panicking via ARM's Instrumentation Trace
-# Macrocell) or "semihosting" (denoting logging/panicking via ARM
-# semihosting).  We are biased to ITM because semihosting is excruciatingly
-# slow (it is breakpoint based) and has an undesirable failure mode if logging
-# output is generated and debugger is not attached (namely, the target stops).
-# If one does choose to change this to semihosting for purposes of
-# development, be sure to also change it in every task of interest.
-#
-features = ["itm"]
 
 [tasks.jefe]
 name = "task-jefe"
 priority = 0
 max-sizes = {flash = 8192, ram = 2048}
 start = true
-features = ["itm"]
 stacksize = 1536
+notifications = ["fault", "timer"]
 
 [tasks.sys]
 name = "drv-stm32xx-sys"
@@ -40,10 +29,11 @@ task-slots = ["jefe"]
 name = "drv-stm32xx-i2c-server"
 features = ["wb55"]
 priority = 2
-max-sizes = {flash = 16384, ram = 2048}
+max-sizes = {flash = 16384, ram = 4096}
 uses = ["i2c1"]
 start = true
 task-slots = ["sys"]
+notifications = ["i2c1-irq"]
 
 [tasks.spi1_driver]
 name = "drv-stm32wb-spi-server"
@@ -52,7 +42,8 @@ max-sizes = {flash = 16384, ram = 2048}
 features = ["spi1", "wb55"]
 uses = ["spi1"]
 start = true
-interrupts = {"spi1.irq" = 1}
+notifications = ["spi-irq"]
+interrupts = {"spi1.irq" = "spi-irq"}
 stacksize = 880
 task-slots = ["sys"]
 
@@ -66,7 +57,8 @@ max-sizes = {flash = 16384, ram = 2048}
 features = ["spi2", "wb55"]
 uses = ["spi2"]
 start = true
-interrupts = {"spi2.irq" = 1}
+notifications = ["spi-irq"]
+interrupts = {"spi2.irq" = "spi-irq"}
 stacksize = 880
 task-slots = ["sys"]
 
@@ -74,8 +66,8 @@ task-slots = ["sys"]
 global_config = "spi2"
 
 [tasks.i2c_driver.interrupts]
-"i2c1.event" = 0b0000_0001
-"i2c1.error" = 0b0000_0001
+"i2c1.event" = "i2c1-irq"
+"i2c1.error" = "i2c1-irq"
 
 [tasks.display]
 name = "drv-flipper-display-server"
@@ -90,11 +82,12 @@ priority = 3
 start = true
 task-slots = ["sys", "i2c_driver"]
 uses = ["syscfg", "exti"]
+notifications = ["exti-exti3-irq", "exti-exti9_5-irq", "exti-exti15_10-irq", "timer"]
 
 [tasks.input.interrupts]
-"exti.exti3" = 0b0000_0001
-"exti.exti9_5" = 0b0000_0010
-"exti.exti15_10" = 0b0000_0100
+"exti.exti3" = "exti-exti3-irq"
+"exti.exti9_5" ="exti-exti9_5-irq"
+"exti.exti15_10" = "exti-exti15_10-irq"
 
 #[tasks.demo]
 #name = "task-flipper-demo"
@@ -159,8 +152,9 @@ clock_divider = "Div16"
 [[config.i2c.controllers]]
 controller = 1
 
-[[config.i2c.controllers.ports.A.pins]]
-pins = [ 9, 10 ]
+[config.i2c.controllers.ports.A]
+scl.pin = 9
+sda.pin = 10
 af = 4
 
 [[config.i2c.devices]]
