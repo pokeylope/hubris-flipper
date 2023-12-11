@@ -98,16 +98,16 @@ notifications = ["exti-exti3-irq", "exti-exti9_5-irq", "exti-exti15_10-irq", "ti
 
 [tasks.spectrum_analyzer]
 name = "task-flipper-spectrum-analyzer"
-priority = 4
+priority = 5
 start = true
 task-slots = ["display", "spi1_driver"]
 stacksize = 3072
 
-[tasks.blink]
-name = "task-blink"
-priority = 5
-start = true
-task-slots = ["sys", "i2c_driver"]
+#[tasks.blink]
+#name = "task-blink"
+#priority = 4
+#start = true
+#task-slots = ["sys", "i2c_driver"]
 
 [tasks.idle]
 name = "task-idle"

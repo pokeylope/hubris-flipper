@@ -6,12 +6,17 @@
 #![no_main]
 
 use core::convert::From;
-use drv_i2c_devices::lp5562::*;
+use drv_i2c_devices::{bq25896::*, lp5562::*};
 use drv_stm32xx_sys_api::*;
+use enum_map::Enum;
+use multitimer::Multitimer;
 use stm32wb::stm32wb55 as device;
 use userlib::*;
 
 const BACKLIGHT_DURATION: u64 = 30 * 1000;
+const SHUTDOWN_HOLD_TIME: u64 = 2 * 1000;
+
+const PERIPH_POWER: PinSet = Port::A.pin(3);
 
 struct Button {
     pinset: PinSet,
@@ -73,25 +78,57 @@ fn main() -> ! {
     lp5562.set_color(255, 0, 0).unwrap();
     lp5562.enable_backlight().unwrap();
 
+    let bq25896 = Bq25896::new(&i2c_config::devices::bq25896(i2c_task)[0]);
+
+    #[derive(Copy, Clone, Enum)]
+    enum Timers {
+        Backlight,
+        Shutdown,
+    }
+    let mut multitimer = Multitimer::<Timers>::new(notifications::TIMER_BIT);
+
     sys_irq_control(notifications::EXTI_EXTI3_IRQ_MASK, true);
     sys_irq_control(notifications::EXTI_EXTI9_5_IRQ_MASK, true);
     sys_irq_control(notifications::EXTI_EXTI15_10_IRQ_MASK, true);
-    sys_set_timer(Some(sys_get_timer().now + BACKLIGHT_DURATION), notifications::TIMER_MASK);
+    multitimer.set_timer(Timers::Backlight, sys_get_timer().now + BACKLIGHT_DURATION, None);
     let notification_mask = notifications::EXTI_EXTI3_IRQ_MASK | notifications::EXTI_EXTI9_5_IRQ_MASK | notifications::EXTI_EXTI15_10_IRQ_MASK | notifications::TIMER_MASK;
+    let mut back_pushed = false;
+    let mut shutdown = false;
     loop {
         let result = sys_recv_closed(&mut [], notification_mask, TaskId::KERNEL).unwrap();
         match result.operation {
-            notifications::TIMER_MASK => lp5562.disable_backlight().unwrap(),
+            notifications::TIMER_MASK => {
+                multitimer.handle_notification(result.operation);
+                for timer in multitimer.iter_fired() {
+                    match timer {
+                        Timers::Backlight => lp5562.disable_backlight().unwrap(),
+                        Timers::Shutdown => {
+                            shutdown = true;
+                            lp5562.set_color(255, 0, 0).unwrap();
+                        },
+                    }
+                }
+            },
             _ => {
                 if let Some(button) = BUTTONS.iter().find(|b| b.is_pushed(&sys)) {
                     lp5562.enable_backlight().unwrap();
-                    sys_set_timer(Some(sys_get_timer().now + BACKLIGHT_DURATION), notifications::TIMER_MASK);
+                    multitimer.set_timer(Timers::Backlight, sys_get_timer().now + BACKLIGHT_DURATION, None);
                     sys.gpio_set(OUT_PIN);
                     let (r, g, b) = button.color;
                     lp5562.set_color(r, g, b).unwrap();
                 } else {
                     sys.gpio_reset(OUT_PIN);
                     lp5562.set_color(255, 0, 0).unwrap();
+                }
+                if shutdown && !BUTTON_BACK.is_pushed(&sys) {
+                    power_off(&sys, &bq25896);
+                } else if !back_pushed && BUTTON_BACK.is_pushed(&sys) {
+                    back_pushed = true;
+                    multitimer.set_timer(Timers::Shutdown, sys_get_timer().now + SHUTDOWN_HOLD_TIME, None);
+                    lp5562.set_color(0, 255, 0).unwrap();
+                } else if back_pushed && !BUTTON_BACK.is_pushed(&sys) {
+                    back_pushed = false;
+                    multitimer.clear_timer(Timers::Shutdown);
                 }
                 exti.pr1.write(|w| unsafe { w.bits(0xffffffff) });
                 sys_irq_control(result.operation, true);
@@ -139,6 +176,13 @@ fn configure_exti(
         .modify(|r, w| unsafe { w.bits(r.bits() | 1 << pin) });
     exti.ftsr1
         .modify(|r, w| unsafe { w.bits(r.bits() | 1 << pin) });
+}
+
+fn power_off(sys: &Sys, bq25896: &Bq25896) {
+    // "Crutch: shutting down with ext 3V3 off is causing LSE to stop"
+    let _ = sys.gpio_set(PERIPH_POWER);
+    hl::sleep_for(1);
+    bq25896.power_off().unwrap();
 }
 
 include!(concat!(env!("OUT_DIR"), "/notifications.rs"));
