@@ -1,0 +1,42 @@
+# Hubris on Flipper
+
+Proof-of-concept port of Hubris to the Flipper Zero.
+
+# Features
+
+Support for the Flipper Zero's STM32WB55 microcontroller, plus:
+
+- BQ25896 battery controller
+- CC1101 sub-1 GHz wireless transceiver
+- LP5562 LED controller
+- ST7565R LCD controller
+
+Drawing to the LCD is supported using the [`embedded-graphics`](https://crates.io/crates/embedded-graphics)
+library; see `task/flipper-demo` for an example.
+
+# Usage
+
+## Building
+
+To build the Hubris image:
+
+```console
+$ cargo xtask dist app/flipper-zero/app.toml
+```
+
+You can create a DFU image using `bin2dfu.py` from the [`flipperzero-firmware`](https://github.com/flipperdevices/flipperzero-firmware)
+repository:
+
+```console
+flipperzero-firmware/scripts/bin2dfu.py -i hubris/target/flipper-zero/dist/default/final.bin -o hubris.dfu -a 0x08000000 -l Hubris
+```
+
+It can then be flashed to the device [as normal](https://docs.flipper.net/basics/firmware-update/firmware-recovery#Wldo5),
+using qFlipper or `fbt`/[`ufbt`](https://github.com/flipperdevices/flipperzero-ufbt).
+
+## Running
+
+The image contains a demo application that displays a simple spectrum analyzer
+and demonstrates input handling by changing the LED when a button is pushed. It
+can be powered off by holding the Back button for two seconds, releasing it when
+the LED turns red.
