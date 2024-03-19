@@ -40,3 +40,77 @@ The image contains a demo application that displays a simple spectrum analyzer
 and demonstrates input handling by changing the LED when a button is pushed. It
 can be powered off by holding the Back button for two seconds, releasing it when
 the LED turns red.
+
+# Architecture
+
+The STM32WB is overall very similar to the already-supported STM32H7, so we're
+able to reuse a lot of the exisiting code for peripheral interfaces. In
+particular, support for GPIOs and I2C is just a matter of enabling the
+appropriate clocks and adding some definitions to the existing drivers, and the
+SPI driver is a gently-modified copy of the H7 SPI driver.
+
+## Flipper app (`app/flipper-zero/`)
+
+The top-level app primarily sets up various peripheral clocks. It also handles
+entering DFU mode to allow reflashing over USB; if the left button is held
+during startup, it maps in and jumps to the system flash memory, which contains
+the DFU bootloader.
+
+## Battery controller (`drv/i2c-devices/src/bq25896.rs`)
+
+The BQ25896 is a battery and power management controller with an I2C interface.
+It supports a variety of functions, including charge management, voltage
+monitoring, and USB On-The-Go. We ignore all of that and only use the BATFET
+Disable function ("enable shipping mode") to power off the device.
+
+## LED controller (`drv/i2c-devices/src/lp5562.rs`)
+
+The LP5562 is a four-channel (RGB + white) LED controller, also using I2C; per
+the datasheet, applications include both "Fun Lights" and "Indicator Lights". On
+the Flipper Zero, the RGB channels control the color of the indicator light by
+the directional buttons, while the white channel is used for the LCD backlight.
+Here too we ignore most of the advanced functionality and just support setting
+the color for the indicator light and enabling or disabling the backlight.
+
+## Display driver
+
+The Flipper Zero uses a 128x64 ERC12864-series LCD display with an ST7565R
+controller connected via SPI. The ST7565R driver implements drawing to the
+screen, and the `display-api` driver provides an IPC interface that allows it to
+be used from other tasks.
+
+### Display controller (`drv/st7565r/`)
+
+Pixel data for the LCD is addressed by page and column, with each page
+comprising eight rows. Data is written as a series of bytes that each represent
+one column of the current page, and the column number is incremented after each
+byte is received. So, for example, setting the page address to zero and the
+column address to zero and then sending 16 data bytes would draw to the top-left
+16x8 region of the screen.
+
+The driver maintains a framebuffer that gets updated with each draw command but
+doesn't write to the display until the data is flushed. At that point it
+iterates through each page and transfers the data for the entire framebuffer.
+(We could, of course, keep track of dirty regions and only write those, but just
+writing everything is sufficient for our purposes.)
+
+### Display server (`drv/flipper-display-server/`)
+
+The display server task handles communication with the controller via the
+controller driver and exposes an Idol API for drawing operations. This API is
+then wrapped by the `display-api` driver, which provides a
+[`DrawTarget`](https://docs.rs/embedded-graphics-core/latest/embedded_graphics_core/draw_target/trait.DrawTarget.html)
+implementation for clients to use with the `embedded-graphics` library. The
+`flipper-demo` task provides a simple example of using this to draw to the
+screen.
+
+## RF Transceiver (`drv/cc1101/`)
+
+The CC1101 is a low-power RF transceiver that operates at various frequency
+bands in the 300-928 MHz range. It supports a variety of frequency- and
+amplitude-modulation schemes and has hardware support to detect and decode data
+for packet-based protocols. Once again, we don't use or expose any of this
+functionality; all we currently support is setting the frequency and getting the
+reported RSSI at that frequency. The `flipper-spectrum-analyzer` task uses this
+to cycle through a frequency range and display a basic graph of signal power
+over that range.
